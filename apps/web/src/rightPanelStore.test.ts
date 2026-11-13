@@ -1164,8 +1164,38 @@ describe("rightPanelStore", () => {
       resourceId: "term-1",
       terminalIds: ["term-1", "term-2"],
       activeTerminalId: "term-2",
+      splitTree: {
+        type: "branch",
+        direction: "horizontal",
+        ratio: 0.5,
+        first: { type: "leaf", terminalId: "term-1" },
+        second: { type: "leaf", terminalId: "term-2" },
+      },
     });
 
+    useRightPanelStore.getState().splitTerminal(refA, "terminal:term-1", "term-3", "vertical");
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "terminal:term-1",
+      kind: "terminal",
+      resourceId: "term-1",
+      terminalIds: ["term-1", "term-2", "term-3"],
+      activeTerminalId: "term-3",
+      splitTree: {
+        type: "branch",
+        direction: "horizontal",
+        ratio: 0.5,
+        first: { type: "leaf", terminalId: "term-1" },
+        second: {
+          type: "branch",
+          direction: "vertical",
+          ratio: 0.5,
+          first: { type: "leaf", terminalId: "term-2" },
+          second: { type: "leaf", terminalId: "term-3" },
+        },
+      },
+    });
+
+    useRightPanelStore.getState().closeTerminal(refA, "terminal:term-1", "term-3");
     useRightPanelStore.getState().activateTerminal(refA, "terminal:term-1", "term-1");
     useRightPanelStore.getState().closeTerminal(refA, "terminal:term-1", "term-1");
     expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({

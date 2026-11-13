@@ -1,4 +1,4 @@
-import { FolderPlusIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
+import { FolderPlusIcon, FolderTreeIcon, SearchIcon, SquarePenIcon, XIcon } from "lucide-react";
 import {
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -14,6 +14,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface SidebarThreadHeaderProps {
   hasProjects: boolean;
+  groupedByProject: boolean;
+  onToggleGroupByProject: () => void;
   projectScope: ReactNode;
   onNewProject: () => void;
   onNewThread: (event: ReactMouseEvent) => void;
@@ -33,6 +35,8 @@ export interface SidebarThreadHeaderProps {
 
 export function SidebarThreadHeader({
   hasProjects,
+  groupedByProject,
+  onToggleGroupByProject,
   projectScope,
   onNewProject,
   onNewThread,
@@ -99,6 +103,14 @@ export function SidebarThreadHeader({
       <div className="flex shrink-0 items-center">
         {hasProjects ? (
           <>
+            <SidebarHeaderIconButton
+              label="Group threads by project"
+              aria-pressed={groupedByProject}
+              isActive={groupedByProject}
+              onClick={onToggleGroupByProject}
+            >
+              <FolderTreeIcon />
+            </SidebarHeaderIconButton>
             {projectScope}
             <SidebarHeaderIconButton label="Add project" onClick={onNewProject}>
               <FolderPlusIcon />
@@ -133,12 +145,14 @@ export function SidebarThreadHeader({
 export function SidebarHeaderIconButton({
   label,
   tooltip = label,
+  isActive,
   className,
   children,
   ...rest
 }: {
   label: string;
   tooltip?: ReactNode;
+  isActive?: boolean | undefined;
   className?: string | undefined;
   children?: ReactNode;
 } & Omit<
@@ -152,6 +166,7 @@ export function SidebarHeaderIconButton({
           <SidebarMenuButton
             size="icon"
             type="button"
+            isActive={Boolean(isActive)}
             aria-label={label}
             {...rest}
             className={cn("relative size-7 shrink-0", className)}

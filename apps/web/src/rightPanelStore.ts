@@ -9,6 +9,14 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { useClosedViewStore } from "./closedViewStore";
 import { resolveStorage } from "./lib/storage";
+import {
+  reconcileTerminalSplitTree,
+  splitTerminalLeafInTree,
+  summarizeSplitTreeDirections,
+  terminalSplitTreesEqual,
+  updateTerminalSplitRatioAtPath,
+  type TerminalSplitNode,
+} from "./lib/terminalSplitTree";
 import type { ThreadPanelPresentation } from "./rightPanelLayout";
 import type { ChatFileAttachment } from "./types";
 
@@ -45,6 +53,7 @@ export type RightPanelSurface =
       terminalIds: string[];
       activeTerminalId: string;
       splitDirection?: "horizontal" | "vertical";
+      splitTree?: TerminalSplitNode;
     }
   | { id: "diff"; kind: "diff" }
   | {
@@ -168,6 +177,12 @@ interface RightPanelStoreState {
     surfaceId: string,
     terminalId: string,
     direction?: "horizontal" | "vertical",
+  ) => void;
+  setTerminalSplitRatio: (
+    ref: ScopedThreadRef,
+    surfaceId: string,
+    path: string,
+    ratio: number,
   ) => void;
   activateTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
   closeTerminal: (ref: ScopedThreadRef, surfaceId: string, terminalId: string) => void;
@@ -562,17 +577,41 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                             ),
                           ]
                         : [surface.resourceId];
+                    const resolvedTerminalIds =
+                      terminalIds.length > 0 ? terminalIds : [surface.resourceId];
                     const activeTerminalId =
                       "activeTerminalId" in surface &&
                       typeof surface.activeTerminalId === "string" &&
-                      terminalIds.includes(surface.activeTerminalId)
+                      resolvedTerminalIds.includes(surface.activeTerminalId)
                         ? surface.activeTerminalId
-                        : (terminalIds[0] ?? surface.resourceId);
+                        : (resolvedTerminalIds[0] ?? surface.resourceId);
+                    const persistedSplitDirection =
+                      "splitDirection" in surface && surface.splitDirection === "vertical"
+                        ? ("vertical" as const)
+                        : undefined;
+                    const splitTree =
+                      resolvedTerminalIds.length > 1
+                        ? reconcileTerminalSplitTree(
+                            "splitTree" in surface ? surface.splitTree : undefined,
+                            resolvedTerminalIds,
+                            persistedSplitDirection ?? "horizontal",
+                          )
+                        : null;
+                    const summaryDirection = summarizeSplitTreeDirections(splitTree);
+                    const {
+                      splitDirection: _oldSplitDirection,
+                      splitTree: _oldSplitTree,
+                      ...baseSurface
+                    } = surface;
                     return [
                       {
-                        ...surface,
-                        terminalIds: terminalIds.length > 0 ? terminalIds : [surface.resourceId],
+                        ...baseSurface,
+                        terminalIds: resolvedTerminalIds,
                         activeTerminalId,
+                        ...(summaryDirection === "vertical"
+                          ? { splitDirection: "vertical" as const }
+                          : {}),
+                        ...(splitTree && splitTree.type === "branch" ? { splitTree } : {}),
                       },
                     ];
                   })
@@ -896,15 +935,60 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             activeSurfaceId: surfaceId,
             surfaces: current.surfaces.map((surface) => {
               if (surface.id !== surfaceId || surface.kind !== "terminal") return surface;
-              const { splitDirection: _splitDirection, ...baseSurface } = surface;
+              const {
+                splitDirection: _splitDirection,
+                splitTree: _splitTree,
+                ...baseSurface
+              } = surface;
+              const nextTerminalIds = [...surface.terminalIds];
+              if (!nextTerminalIds.includes(terminalId)) {
+                const anchorIndex = nextTerminalIds.indexOf(surface.activeTerminalId);
+                if (anchorIndex >= 0) {
+                  nextTerminalIds.splice(anchorIndex + 1, 0, terminalId);
+                } else {
+                  nextTerminalIds.push(terminalId);
+                }
+              }
+              const nextSplitTree = splitTerminalLeafInTree({
+                tree: surface.splitTree,
+                existingTerminalIds: surface.terminalIds,
+                anchorTerminalId: surface.activeTerminalId,
+                newTerminalId: terminalId,
+                direction,
+                fallbackDirection: surface.splitDirection ?? "horizontal",
+              });
+              const summaryDirection = summarizeSplitTreeDirections(nextSplitTree);
               return {
                 ...baseSurface,
-                terminalIds: surface.terminalIds.includes(terminalId)
-                  ? surface.terminalIds
-                  : [...surface.terminalIds, terminalId],
+                terminalIds: nextTerminalIds,
                 activeTerminalId: terminalId,
-                ...(direction === "vertical" ? { splitDirection: "vertical" as const } : {}),
+                ...(summaryDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
+                ...(nextSplitTree.type === "branch" ? { splitTree: nextSplitTree } : {}),
               };
+            }),
+          })),
+        ),
+      setTerminalSplitRatio: (ref, surfaceId, path, ratio) =>
+        set((state) =>
+          automaticUpdate(state, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) => {
+              if (
+                surface.id !== surfaceId ||
+                surface.kind !== "terminal" ||
+                surface.terminalIds.length <= 1
+              ) {
+                return surface;
+              }
+              const baseTree = reconcileTerminalSplitTree(
+                surface.splitTree,
+                surface.terminalIds,
+                surface.splitDirection ?? "horizontal",
+              );
+              if (!baseTree || baseTree.type === "leaf") return surface;
+              const nextTree = updateTerminalSplitRatioAtPath(baseTree, path, ratio);
+              if (terminalSplitTreesEqual(surface.splitTree, nextTree)) return surface;
+              return { ...surface, splitTree: nextTree };
             }),
           })),
         ),
@@ -946,18 +1030,42 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             }
             return {
               ...current,
-              surfaces: current.surfaces.map((entry) =>
-                entry.id === surfaceId && entry.kind === "terminal"
-                  ? {
-                      ...entry,
-                      terminalIds,
-                      activeTerminalId:
-                        entry.activeTerminalId === terminalId
-                          ? (terminalIds.at(-1) ?? terminalIds[0]!)
-                          : entry.activeTerminalId,
-                    }
-                  : entry,
-              ),
+              surfaces: current.surfaces.map((entry) => {
+                if (entry.id !== surfaceId || entry.kind !== "terminal") return entry;
+                const {
+                  splitDirection: _oldSplitDirection,
+                  splitTree: _oldSplitTree,
+                  ...baseEntry
+                } = entry;
+                const closedIndex = entry.terminalIds.indexOf(terminalId);
+                const nextActiveTerminalId =
+                  entry.activeTerminalId === terminalId
+                    ? (entry.terminalIds[closedIndex + 1] ??
+                      entry.terminalIds[closedIndex - 1] ??
+                      terminalIds.at(-1) ??
+                      terminalIds[0]!)
+                    : entry.activeTerminalId;
+                const nextSplitTree =
+                  terminalIds.length > 1
+                    ? reconcileTerminalSplitTree(
+                        entry.splitTree,
+                        terminalIds,
+                        entry.splitDirection ?? "horizontal",
+                      )
+                    : null;
+                const summaryDirection = summarizeSplitTreeDirections(nextSplitTree);
+                return {
+                  ...baseEntry,
+                  terminalIds,
+                  activeTerminalId: nextActiveTerminalId,
+                  ...(summaryDirection === "vertical"
+                    ? { splitDirection: "vertical" as const }
+                    : {}),
+                  ...(nextSplitTree && nextSplitTree.type === "branch"
+                    ? { splitTree: nextSplitTree }
+                    : {}),
+                };
+              }),
             };
           }),
         ),

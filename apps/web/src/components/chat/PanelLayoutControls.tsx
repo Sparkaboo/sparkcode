@@ -1,9 +1,11 @@
+import type { DiscoveredLocalServer, ScopedThreadRef } from "@t3tools/contracts";
 import {
-  PanelBottomIcon,
+  Maximize2Icon,
+  MessageSquareTextIcon,
+  Minimize2Icon,
   PanelRightIcon,
   SquareMenuIcon,
-  Maximize2Icon,
-  Minimize2Icon,
+  SquareTerminalIcon,
 } from "lucide-react";
 import { memo, type ReactNode } from "react";
 
@@ -14,6 +16,7 @@ import { PopoverCreateHandle, PopoverTrigger } from "../ui/popover";
 import { useMobileSidebarSheetMounted } from "../ui/sidebar";
 import { Toggle } from "../ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ProjectPortsHoverMenu } from "./ProjectPortsHoverMenu";
 
 export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
@@ -22,6 +25,10 @@ export interface PanelLayoutControlsProps {
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
+  terminalPorts?: ReadonlyArray<DiscoveredLocalServer> | undefined;
+  terminalPreviewThreadRef?: ScopedThreadRef | null | undefined;
+  terminalHasRunningProcess?: boolean | undefined;
+  terminalProcessLabel?: string | null | undefined;
   threadPanelOpen: boolean;
   threadPanelPresentation: ThreadPanelPresentation;
   threadPanelPopoverHandle?: ReturnType<typeof PopoverCreateHandle>;
@@ -42,6 +49,10 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
+  terminalPorts = [],
+  terminalPreviewThreadRef = null,
+  terminalHasRunningProcess = false,
+  terminalProcessLabel = null,
   threadPanelOpen,
   threadPanelPresentation,
   threadPanelPopoverHandle,
@@ -82,34 +93,55 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
     </Tooltip>
   );
 
+  const hasPorts = terminalPorts.length > 0;
+  const processTooltipSummary =
+    !terminalOpen && terminalHasRunningProcess ? ` · ${terminalProcessLabel ?? "终端运行中"}` : "";
+
   return (
     <div
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
-      {showThreadPanelControl ? threadPanelControl : null}
+      {showTerminalControl && hasPorts ? (
+        <ProjectPortsHoverMenu
+          ports={terminalPorts}
+          threadRef={terminalPreviewThreadRef}
+          onOpenTerminal={terminalOpen ? undefined : onToggleTerminal}
+        />
+      ) : null}
       {showTerminalControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>
             <Toggle
-              className="shrink-0 [-webkit-app-region:no-drag]"
-              pressed={terminalOpen}
+              className="relative shrink-0 [-webkit-app-region:no-drag]"
+              pressed={false}
               onPressedChange={onToggleTerminal}
-              aria-label="Toggle terminal drawer"
+              aria-label={terminalOpen ? "返回对话" : "Toggle terminal drawer"}
+              data-group-terminal-toggle
               variant="ghost"
               size="sm"
               disabled={!terminalAvailable}
             >
-              <PanelBottomIcon className="size-4" />
+              {terminalOpen ? (
+                <MessageSquareTextIcon className="size-4" />
+              ) : (
+                <>
+                  <SquareTerminalIcon className="size-4" />
+                  {!hasPorts && terminalHasRunningProcess ? (
+                    <span className="pointer-events-none absolute top-1 right-1 size-1.5 rounded-full bg-success" />
+                  ) : null}
+                </>
+              )}
             </Toggle>
           </TooltipTrigger>
           <TooltipPopup side="bottom">
             {terminalAvailable
-              ? `Toggle terminal drawer${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}`
-              : "Terminal drawer is unavailable"}
+              ? `${terminalOpen ? "返回对话" : "项目终端"}${terminalShortcutLabel ? ` (${terminalShortcutLabel})` : ""}${processTooltipSummary}`
+              : "Terminal is unavailable"}
           </TooltipPopup>
         </Tooltip>
       ) : null}
+      {showThreadPanelControl ? threadPanelControl : null}
       {showRightPanelControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>

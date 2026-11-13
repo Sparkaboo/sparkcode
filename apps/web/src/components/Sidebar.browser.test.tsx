@@ -122,6 +122,63 @@ describe("sidebar header new thread", () => {
       expect(startThread).toHaveBeenCalledExactlyOnceWith(currentProjectRef);
     }
   });
+
+  it("groups threads by project by default and toggles to flat mode from the header", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => {
+      window.localStorage.removeItem("t3code:client-settings:v1");
+      __setClientSettingsForTests(previousSettings);
+      vi.mocked(useQuietThreadShells).mockRestore();
+    });
+    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
+
+    const alpha = project("alpha");
+    const beta = project("beta");
+    vi.mocked(useProjects).mockReturnValue([alpha, beta]);
+    vi.mocked(useQuietThreadShells).mockReturnValue([
+      threadShell(alpha.id, 1),
+      threadShell(beta.id, 2),
+    ]);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: { environmentId: alpha.environmentId, projectId: alpha.id },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+
+    const toggleButton = screen.getByRole("button", {
+      name: "Group threads by project",
+      exact: true,
+    });
+    await expect.element(toggleButton).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-project-folder"]'),
+    ).toHaveLength(2);
+
+    await userEvent.click(toggleButton);
+    await expect.element(toggleButton).toHaveAttribute("aria-pressed", "false");
+    expect(getClientSettings().boringSidebarEnabled).toBe(false);
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-project-folder"]'),
+    ).toHaveLength(0);
+
+    await userEvent.click(toggleButton);
+    await expect.element(toggleButton).toHaveAttribute("aria-pressed", "true");
+    expect(getClientSettings().boringSidebarEnabled).toBe(true);
+    expect(
+      screen.container.querySelectorAll('[data-testid="sidebar-project-folder"]'),
+    ).toHaveLength(2);
+  });
 });
 
 function threadShell(projectId: ProjectId, index: number): EnvironmentThreadShell {

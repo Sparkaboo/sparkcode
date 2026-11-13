@@ -64,39 +64,43 @@ interface ChatTerminalActionsInput {
   readonly environmentId: EnvironmentId;
   readonly composerRef: ComposerHandleRef;
   readonly terminalUiState: ReturnType<typeof selectThreadTerminalUiState>;
+  readonly activeGroupTerminalRef: ScopedThreadRef | null;
+  readonly groupRunningTerminalIds: ReadonlyArray<string>;
+  readonly groupServerOrderedTerminalIds: ReadonlyArray<string>;
+  readonly groupTerminalLabelsById: ReadonlyMap<string, string>;
   readonly activeThread: EnvironmentThreadShell | undefined;
   readonly activeThreadId: ThreadId | null;
   readonly activeThreadRef: ScopedThreadRef | null;
   readonly activeProject: EnvironmentProject | null;
   readonly activeRightPanelSurface: RightPanelSurface | null;
-  readonly runningTerminalIds: ReadonlyArray<string>;
-  readonly activeServerOrderedTerminalIds: ReadonlyArray<string>;
   readonly activeTerminalLabelsById: ReadonlyMap<string, string>;
-  readonly panelTerminalIds: ReadonlySet<string>;
   readonly canReuseTerminal: boolean;
   readonly gitCwd: string | null;
   readonly setTerminalUiLaunchContext: Dispatch<SetStateAction<TerminalLaunchContext | null>>;
   readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
 }
 
+const EMPTY_PANEL_TERMINAL_IDS: ReadonlySet<string> = new Set();
+
 /**
- * The thread's terminals: the drawer's and the right panel's, and project scripts and chat
- * code blocks, which run in a reused or new drawer terminal.
+ * Project-group full-canvas terminals (plus project scripts and chat code blocks) run under
+ * `activeGroupTerminalRef`, while thread-following right-panel terminals stay on `activeThreadRef`.
  */
 export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   const {
     environmentId,
     composerRef,
     terminalUiState,
+    activeGroupTerminalRef,
+    groupRunningTerminalIds,
+    groupServerOrderedTerminalIds,
+    groupTerminalLabelsById,
     activeThread,
     activeThreadId,
     activeThreadRef,
     activeProject,
     activeRightPanelSurface,
-    runningTerminalIds,
-    activeServerOrderedTerminalIds,
     activeTerminalLabelsById,
-    panelTerminalIds,
     canReuseTerminal,
     gitCwd,
     setTerminalUiLaunchContext,
@@ -117,7 +121,16 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   const storeSplitTerminalVertical = useTerminalUiStateStore((s) => s.splitTerminalVertical);
   const storeNewTerminal = useTerminalUiStateStore((s) => s.newTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
-  const terminalActions = useThreadTerminalActions(activeThreadRef);
+  const groupTerminalActions = useThreadTerminalActions(activeGroupTerminalRef);
+  const threadTerminalActions = useThreadTerminalActions(activeThreadRef);
+
+  const resolveGroupLaunchLocation = () => {
+    if (!activeProject) return null;
+    return {
+      cwd: activeProject.workspaceRoot,
+      worktreePath: null,
+    };
+  };
 
   const activeTerminalGroup =
     terminalUiState.terminalGroups.find(
@@ -135,13 +148,13 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   };
   const addTerminalContextToDraftStable = useStableCallback(addTerminalContextToDraft);
   const setTerminalOpen = (open: boolean) => {
-    if (!activeThreadRef) return;
-    storeSetTerminalOpen(activeThreadRef, open);
-    focusActiveDrawerTerminal(activeThreadRef);
+    if (!activeGroupTerminalRef) return;
+    storeSetTerminalOpen(activeGroupTerminalRef, open);
+    focusActiveDrawerTerminal(activeGroupTerminalRef);
   };
   const setTerminalOpenStable = useStableCallback(setTerminalOpen);
   const toggleTerminalVisibility = () => {
-    if (!activeThreadRef) return;
+    if (!activeGroupTerminalRef) return;
     const nextOpen = !terminalUiState.terminalOpen;
     if (
       nextOpen &&
@@ -150,53 +163,59 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     )
       return;
     if (nextOpen && hasTerminalWriteAccess() && terminalUiState.terminalIds.length === 0) {
-      // Server-created setup terminals exist before this client's drawer mounts.
-      // Reuse them before allocating a shell from the still-empty UI state.
-      const existingTerminalId =
-        runningTerminalIds.find((id) => !panelTerminalIds.has(id)) ??
-        activeServerOrderedTerminalIds.find((id) => !panelTerminalIds.has(id));
+      const existingTerminalId = groupRunningTerminalIds[0] ?? groupServerOrderedTerminalIds[0];
       if (existingTerminalId !== undefined) {
-        storeEnsureTerminal(activeThreadRef, existingTerminalId, { open: true, active: true });
-        focusActiveDrawerTerminal(activeThreadRef);
+        storeEnsureTerminal(activeGroupTerminalRef, existingTerminalId, {
+          open: true,
+          active: true,
+        });
+        focusActiveDrawerTerminal(activeGroupTerminalRef);
         return;
       }
-      void terminalActions.launchTerminal({
-        place: (terminalId) => storeEnsureTerminal(activeThreadRef, terminalId, { open: true }),
+      const location = resolveGroupLaunchLocation();
+      void groupTerminalActions.launchTerminal({
+        place: (terminalId) =>
+          storeEnsureTerminal(activeGroupTerminalRef, terminalId, { open: true }),
+        ...(location ? { location } : {}),
       })?.result;
-      focusActiveDrawerTerminal(activeThreadRef);
+      focusActiveDrawerTerminal(activeGroupTerminalRef);
       return;
     }
     setTerminalOpen(nextOpen);
   };
   const toggleTerminalVisibilityStable = useStableCallback(toggleTerminalVisibility);
   const splitTerminal = (direction: "horizontal" | "vertical" = "horizontal") => {
-    if (!activeThreadRef || hasReachedSplitLimit) return;
-    const launched = terminalActions.launchTerminal({
+    if (!activeGroupTerminalRef || hasReachedSplitLimit) return;
+    const location = resolveGroupLaunchLocation();
+    const launched = groupTerminalActions.launchTerminal({
       place: (terminalId) =>
         direction === "vertical"
-          ? storeSplitTerminalVertical(activeThreadRef, terminalId)
-          : storeSplitTerminal(activeThreadRef, terminalId),
+          ? storeSplitTerminalVertical(activeGroupTerminalRef, terminalId)
+          : storeSplitTerminal(activeGroupTerminalRef, terminalId),
+      ...(location ? { location } : {}),
     });
     if (!launched) return;
-    focusTerminal(activeThreadRef, launched.terminalId);
+    focusTerminal(activeGroupTerminalRef, launched.terminalId);
     void launched.result;
   };
   const splitTerminalStable = useStableCallback(splitTerminal);
   const createNewTerminal = () => {
-    if (!activeThreadRef) return;
-    const launched = terminalActions.launchTerminal({
-      place: (terminalId) => storeNewTerminal(activeThreadRef, terminalId),
+    if (!activeGroupTerminalRef) return;
+    const location = resolveGroupLaunchLocation();
+    const launched = groupTerminalActions.launchTerminal({
+      place: (terminalId) => storeNewTerminal(activeGroupTerminalRef, terminalId),
+      ...(location ? { location } : {}),
     });
     if (!launched) return;
-    focusTerminal(activeThreadRef, launched.terminalId);
+    focusTerminal(activeGroupTerminalRef, launched.terminalId);
     void launched.result;
   };
   const createNewTerminalStable = useStableCallback(createNewTerminal);
   const closeTerminal = (terminalId: string) => {
-    if (!hasTerminalWriteAccess() || !activeThreadRef) return;
-    terminalActions.closeTerminalSession(terminalId, activeThreadRef);
-    storeCloseTerminal(activeThreadRef, terminalId);
-    focusActiveDrawerTerminal(activeThreadRef);
+    if (!hasTerminalWriteAccess() || !activeGroupTerminalRef) return;
+    groupTerminalActions.closeTerminalSession(terminalId, activeGroupTerminalRef);
+    storeCloseTerminal(activeGroupTerminalRef, terminalId);
+    focusActiveDrawerTerminal(activeGroupTerminalRef);
   };
   const runProjectScript = async (
     script: ProjectScript,
@@ -209,7 +228,8 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
       shellHistory?: "preserve" | "suppress";
     },
   ) => {
-    if (!hasTerminalWriteAccess() || !activeThreadId || !activeProject || !activeThread) return;
+    if (!hasTerminalWriteAccess() || !activeGroupTerminalRef || !activeProject || !activeThread)
+      return;
     if (options?.rememberAsLastInvoked !== false) {
       setLastInvokedScriptByProjectId((current) => {
         if (current[activeProject.id] === script.id) return current;
@@ -224,33 +244,26 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
       !readEnvironmentScope(environmentId, AuthTerminalReadScope)
         ? null
         : findReusableProjectScriptTerminal({
-            // Server sessions cover drawer terminals this client has not opened yet, such as a
-            // worktree setup shell; the helper drops the panel-owned ones.
             drawerTerminalIds: [
-              ...new Set([...terminalUiState.terminalIds, ...activeServerOrderedTerminalIds]),
+              ...new Set([...terminalUiState.terminalIds, ...groupServerOrderedTerminalIds]),
             ],
             activeTerminalId: terminalUiState.activeTerminalId,
-            panelTerminalIds,
-            runningTerminalIds,
+            panelTerminalIds: EMPTY_PANEL_TERMINAL_IDS,
+            runningTerminalIds: groupRunningTerminalIds,
           });
     const targetWorktreePath = options?.worktreePath ?? activeThread.worktreePath ?? null;
 
     setTerminalUiLaunchContext({
-      threadId: activeThreadId,
+      threadId: activeGroupTerminalRef.threadId,
       cwd: targetCwd,
       worktreePath: targetWorktreePath,
     });
-    if (!activeThreadRef) {
-      return;
-    }
 
-    const launched = terminalActions.launchTerminal({
-      // The drawer opens with the target already placed: opening it empty would claim
-      // DEFAULT_THREAD_TERMINAL_ID, which a right-panel terminal may already own.
+    const launched = groupTerminalActions.launchTerminal({
       place: (terminalId) =>
         reusableTerminalId === null
-          ? storeNewTerminal(activeThreadRef, terminalId)
-          : storeEnsureTerminal(activeThreadRef, terminalId, { open: true }),
+          ? storeNewTerminal(activeGroupTerminalRef, terminalId)
+          : storeEnsureTerminal(activeGroupTerminalRef, terminalId, { open: true }),
       ...(reusableTerminalId === null
         ? { size: { cols: SCRIPT_TERMINAL_COLS, rows: SCRIPT_TERMINAL_ROWS } }
         : { terminalId: reusableTerminalId }),
@@ -260,10 +273,10 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     });
     if (!launched) return;
     const targetTerminalId = launched.terminalId;
-    focusTerminal(activeThreadRef, targetTerminalId);
+    focusTerminal(activeGroupTerminalRef, targetTerminalId);
     const openResult = await launched.result;
     if (openResult._tag === "Failure") {
-      if (!isAtomCommandInterrupted(openResult)) {
+      if (!isAtomCommandInterrupted(openResult) && activeThreadId) {
         const error = squashAtomCommandFailure(openResult);
         setThreadError(
           activeThreadId,
@@ -273,7 +286,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
       return;
     }
 
-    const writeResult = await terminalActions.writeToTerminal(
+    const writeResult = await groupTerminalActions.writeToTerminal(
       targetTerminalId,
       options?.shellHistory === "preserve"
         ? `${script.command}\r`
@@ -281,7 +294,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     );
     if (!writeResult) return;
     if (writeResult._tag === "Failure") {
-      if (!isAtomCommandInterrupted(writeResult)) {
+      if (!isAtomCommandInterrupted(writeResult) && activeThreadId) {
         const error = squashAtomCommandFailure(writeResult);
         setThreadError(
           activeThreadId,
@@ -293,6 +306,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
     if (
       script.autoOpenPreview &&
       script.previewUrl &&
+      activeThreadRef &&
       isPreviewAvailableFor(activeThreadRef.environmentId)
     ) {
       const previewResult = await openUrlInPreview({
@@ -329,7 +343,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   const runShellCommandStable = useStableCallback(runShellCommand);
   const addTerminalSurface = () => {
     if (!activeThreadRef) return;
-    const launched = terminalActions.launchTerminal({
+    const launched = threadTerminalActions.launchTerminal({
       place: (terminalId) =>
         useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId),
     });
@@ -347,7 +361,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
       return;
     }
     const surfaceId = activeRightPanelSurface.id;
-    const launched = terminalActions.launchTerminal({
+    const launched = threadTerminalActions.launchTerminal({
       place: (terminalId) =>
         useRightPanelStore
           .getState()
@@ -377,7 +391,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
       (entry) => entry.kind === "terminal" && entry.terminalIds.includes(terminalId),
     );
     if (!surface) return;
-    terminalActions.closeTerminalSession(terminalId, target);
+    threadTerminalActions.closeTerminalSession(terminalId, target);
     storeCloseTerminal(target, terminalId);
     store.closeTerminal(target, surface.id, terminalId);
     focusActivePanelTerminal(target);
@@ -385,7 +399,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
   const closePanelTerminalStable = useStableCallback(closePanelTerminal);
   const requestCloseTerminal = (terminalId: string) => {
     if (!hasTerminalWriteAccess()) return;
-    const label = activeTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId);
+    const label = groupTerminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId);
     void confirmTerminalClose([label]).then((confirmed) => {
       if (confirmed && readEnvironmentScope(environmentId, AuthTerminalOperateScope)) {
         closeTerminal(terminalId);

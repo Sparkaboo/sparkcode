@@ -236,6 +236,8 @@ import {
 } from "../composerDraftStore";
 import { type TerminalContextDraft } from "../lib/terminalContext";
 import { collectInlineContextIds } from "../lib/composerContextReferences";
+import { scopeProjectGroupTerminalRef } from "../lib/projectGroupTerminal";
+import { useProjectGroupDiscoveredPorts } from "../portDiscoveryState";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { useEnvironmentQueryRefresh } from "../state/query";
@@ -753,10 +755,6 @@ export default function ChatView(props: ChatViewProps) {
   const setMultipleModelSelectionsStable = useStableCallback(setMultipleModelSelections);
   const feedbackUploadsInFlightRef = useRef(new Set<string>());
 
-  const terminalUiState = useTerminalUiStateStore((state) =>
-    selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef),
-  );
-
   const fallbackDraftProjectRef = draftThread
     ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
     : null;
@@ -972,10 +970,6 @@ export default function ChatView(props: ChatViewProps) {
   const activeMessageCount = isServerThread
     ? Math.max(committedServerMessageIds.size, serverProjection?.messages.length ?? 0)
     : 0;
-  const runningTerminalIds = useThreadRunningTerminalIds({
-    environmentId: activeThread?.environmentId ?? null,
-    threadId: activeThreadId,
-  });
   const activeThreadKnownSessionsRaw = useKnownTerminalSessions({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -988,9 +982,6 @@ export default function ChatView(props: ChatViewProps) {
       (session) => session.target.threadId === activeThreadId,
     );
   })();
-  const activeServerOrderedTerminalIds = activeThreadKnownSessions.map(
-    (session) => session.target.terminalId,
-  );
   const activeTerminalLabelsById = (() => {
     const labels = new Map<string, string>();
     for (const session of activeThreadKnownSessions) {
@@ -1069,12 +1060,6 @@ export default function ChatView(props: ChatViewProps) {
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),
   );
-  const panelTerminalIds = new Set(
-    rightPanelState.surfaces.flatMap((surface) =>
-      surface.kind === "terminal" ? surface.terminalIds : [],
-    ),
-  );
-  const canReuseTerminal = activeThreadKnownSessionsRaw !== null;
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
   const rightPanelOpen = rightPanelState.isOpen;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
@@ -1116,6 +1101,48 @@ export default function ChatView(props: ChatViewProps) {
       ? scopeProjectRef(activeThreadEnvironmentId, activeThreadProjectId)
       : null;
   const activeProject = useProject(activeProjectRef);
+  const activeGroupTerminalRef = activeProjectRef
+    ? scopeProjectGroupTerminalRef(activeProjectRef.environmentId, activeProjectRef.projectId)
+    : null;
+  const activeGroupTerminalKey = activeGroupTerminalRef
+    ? scopedThreadKey(activeGroupTerminalRef)
+    : null;
+  const terminalUiState = useTerminalUiStateStore((state) =>
+    selectThreadTerminalUiState(state.terminalUiStateByThreadKey, activeGroupTerminalRef),
+  );
+  const groupRunningTerminalIds = useThreadRunningTerminalIds({
+    environmentId: activeGroupTerminalRef?.environmentId ?? null,
+    threadId: activeGroupTerminalRef?.threadId ?? null,
+  });
+  const groupKnownSessionsRaw = useKnownTerminalSessions({
+    environmentId: activeGroupTerminalRef?.environmentId ?? null,
+    threadId: activeGroupTerminalRef?.threadId ?? null,
+  });
+  const groupKnownSessions = (() => {
+    if (!activeGroupTerminalRef || groupKnownSessionsRaw === null) {
+      return [];
+    }
+    return groupKnownSessionsRaw.filter(
+      (session) => session.target.threadId === activeGroupTerminalRef.threadId,
+    );
+  })();
+  const groupServerOrderedTerminalIds = groupKnownSessions.map(
+    (session) => session.target.terminalId,
+  );
+  const groupTerminalLabelsById = (() => {
+    const labels = new Map<string, string>();
+    for (const session of groupKnownSessions) {
+      labels.set(
+        session.target.terminalId,
+        resolveTerminalSessionLabel(session.target.terminalId, session.state.summary),
+      );
+    }
+    return labels;
+  })();
+  const groupDiscoveredPorts = useProjectGroupDiscoveredPorts({
+    environmentId: activeProjectRef?.environmentId ?? null,
+    projectId: activeProjectRef?.projectId ?? null,
+  });
   const activeProjectSettings = resolveProjectSettings(
     settings,
     activeProject?.id ?? null,
@@ -1725,6 +1752,10 @@ export default function ChatView(props: ChatViewProps) {
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
+  const activeGroupTerminalLaunchContext =
+    activeGroupTerminalRef && terminalUiLaunchContext?.threadId === activeGroupTerminalRef.threadId
+      ? terminalUiLaunchContext
+      : null;
   const liveIsGitRepo = gitStatusQuery.data?.isRepo;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records live git repo status in the session cache read while the status query is unavailable
   useEffect(() => {
@@ -1915,20 +1946,47 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     composerRef,
     terminalUiState,
+    activeGroupTerminalRef,
     activeThread,
     activeThreadId,
     activeThreadRef,
     activeProject,
     activeRightPanelSurface,
-    runningTerminalIds,
-    activeServerOrderedTerminalIds,
+    groupRunningTerminalIds,
+    groupServerOrderedTerminalIds,
+    groupTerminalLabelsById,
     activeTerminalLabelsById,
-    panelTerminalIds,
-    canReuseTerminal,
+    canReuseTerminal: groupKnownSessionsRaw !== null,
     gitCwd,
     setTerminalUiLaunchContext,
     setThreadError,
   });
+  const terminalProcessLabel = (() => {
+    if (groupRunningTerminalIds.length === 0) {
+      return groupDiscoveredPorts.length === 1 ? "dev" : null;
+    }
+    const firstRunningId = groupRunningTerminalIds[0];
+    const runningLabel = firstRunningId
+      ? groupTerminalLabelsById.get(firstRunningId)?.trim()
+      : null;
+    if (
+      runningLabel &&
+      runningLabel.length <= 16 &&
+      !/^(terminal(\s+\d+)?|zsh|bash|fish|sh|nu|pwsh|powershell|cmd)$/i.test(runningLabel)
+    ) {
+      return runningLabel;
+    }
+    if (activeProject) {
+      const rememberedId = lastInvokedScriptByProjectId[activeProject.id];
+      const matched = rememberedId
+        ? activeProjectScripts.find((script) => script.id === rememberedId)
+        : undefined;
+      if (matched && matched.name.trim().length <= 16) {
+        return matched.name.trim();
+      }
+    }
+    return groupDiscoveredPorts.length === 1 ? "dev" : null;
+  })();
   const {
     saveProjectScript: saveProjectScriptStable,
     updateProjectScript: updateProjectScriptStable,
@@ -2147,6 +2205,7 @@ export default function ChatView(props: ChatViewProps) {
     !embedded,
     terminalUiState.terminalOpen,
     focusComposerStable,
+    activeGroupTerminalRef,
   );
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window focus listener that refocuses the composer after the window regains focus
@@ -2181,6 +2240,16 @@ export default function ChatView(props: ChatViewProps) {
     isMobileViewport,
     terminalUiState.terminalOpen,
   ]);
+
+  const previousRouteKeyForGroupTerminalRef = useRef(routeThreadKey);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- returns from the project-group full-canvas terminal to chat when switching threads via keyboard, palette, or history
+  useLayoutEffect(() => {
+    if (previousRouteKeyForGroupTerminalRef.current === routeThreadKey) return;
+    previousRouteKeyForGroupTerminalRef.current = routeThreadKey;
+    if (!embedded) {
+      useTerminalUiStateStore.getState().closeAllProjectGroupTerminals();
+    }
+  }, [embedded, routeThreadKey]);
 
   // Promotion drops draftId while a send may still be dispatching, so key by thread.
   const [localDispatchThreadId, setLocalDispatchThreadId] = useState(threadId);
@@ -2668,16 +2737,14 @@ export default function ChatView(props: ChatViewProps) {
     ];
   })() as ComposerBannerStackItem[];
 
+  const activeTerminalLaunchThreadId = activeGroupTerminalRef?.threadId ?? activeThreadId;
   if (
     terminalUiLaunchContext !== null &&
-    (terminalUiLaunchContext.threadId !== activeThreadId ||
+    (terminalUiLaunchContext.threadId !== activeTerminalLaunchThreadId ||
       !terminalUiState.terminalOpen ||
       (activeProjectCwd !== null &&
-        projectScriptCwd({
-          project: { cwd: activeProjectCwd },
-          worktreePath: activeThreadWorktreePath,
-        }) === terminalUiLaunchContext.cwd &&
-        (activeThreadWorktreePath ?? null) === terminalUiLaunchContext.worktreePath))
+        activeProjectCwd === terminalUiLaunchContext.cwd &&
+        terminalUiLaunchContext.worktreePath === null))
   ) {
     setTerminalUiLaunchContext(null);
   }
@@ -3252,6 +3319,10 @@ export default function ChatView(props: ChatViewProps) {
     terminalAvailable: activeProject !== null,
     terminalOpen: terminalUiState.terminalOpen,
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
+    terminalPorts: groupDiscoveredPorts,
+    terminalPreviewThreadRef: activeThreadRef,
+    terminalHasRunningProcess: groupRunningTerminalIds.length > 0,
+    terminalProcessLabel,
     threadPanelOpen,
     threadPanelPresentation,
     threadPanelPopoverHandle,
@@ -3329,7 +3400,7 @@ export default function ChatView(props: ChatViewProps) {
             {isElectron && rightPanelControlsAtRoot ? (
               <span
                 aria-hidden
-                className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+                className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-44 [-webkit-app-region:no-drag]"
               />
             ) : null}
             {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
@@ -3353,7 +3424,12 @@ export default function ChatView(props: ChatViewProps) {
           </header>
         )}
 
-        <div className="relative flex min-h-0 min-w-0 flex-1">
+        <div
+          className={cn(
+            "relative flex min-h-0 min-w-0 flex-1",
+            !embedded && terminalUiState.terminalOpen && "hidden",
+          )}
+        >
           <ThreadFindCanvas
             findOptions={{
               skills: timelineSkills,
@@ -3935,18 +4011,24 @@ export default function ChatView(props: ChatViewProps) {
         </div>
 
         {embedded ? null : (
-          <ChatTerminalDrawers
-            activeThreadKey={activeThreadKey}
-            activeTerminalOpen={Boolean(terminalUiState.terminalOpen)}
-            composerHeight={composerReservedHeight}
-            launchContext={activeTerminalLaunchContext ?? null}
-            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-            splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
-            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-            keybindings={keybindings}
-            onAddTerminalContext={addTerminalContextToDraftStable}
-          />
+          <div
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              !terminalUiState.terminalOpen && "hidden",
+            )}
+          >
+            <ChatTerminalDrawers
+              activeGroupTerminalKey={activeGroupTerminalKey}
+              activeTerminalOpen={Boolean(terminalUiState.terminalOpen)}
+              launchContext={activeGroupTerminalLaunchContext ?? null}
+              splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+              splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
+              newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+              closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+              keybindings={keybindings}
+              onAddTerminalContext={addTerminalContextToDraftStable}
+            />
+          </div>
         )}
       </div>
 

@@ -9,6 +9,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { nextTerminalId } from "@t3tools/shared/terminalLabels";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { parseProjectIdFromTerminalThreadId } from "../../lib/projectGroupTerminal";
 import { randomUUID } from "~/lib/utils";
 import { selectThreadRightPanelState, useRightPanelStore } from "../../rightPanelStore";
 import { useProject, useQuietThreadShell } from "../../state/entities";
@@ -33,11 +34,14 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
+  const groupProjectId = threadRef ? parseProjectIdFromTerminalThreadId(threadRef.threadId) : null;
   const projectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
     : draftThread
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+      : threadRef && groupProjectId
+        ? scopeProjectRef(threadRef.environmentId, groupProjectId)
+        : null;
   const project = useProject(projectRef);
   const threadWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
   const knownSessions = useKnownTerminalSessions({

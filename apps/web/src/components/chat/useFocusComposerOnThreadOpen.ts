@@ -10,27 +10,33 @@ export function useFocusComposerOnThreadOpen(
   enabled: boolean,
   terminalOpen: boolean,
   focusComposer: () => void,
+  drawerThreadRef: ScopedThreadRef | null = threadRef,
 ) {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- restores DOM focus on thread entry and after the drawer opens or closes
   useEffect(() => {
     if (!threadRef || !enabled || !root) return;
     let frame: number | undefined;
-    const leave = restoreFocusOnThreadEnter(threadRef, {
-      root,
-      focusComposer: () => {
-        frame = window.requestAnimationFrame(() => {
-          // Double-clicking a sidebar row opens its thread and its rename field in one gesture.
-          if (document.activeElement?.matches("[data-sidebar-row] input")) return;
-          focusComposer();
-        });
+    const leave = restoreFocusOnThreadEnter(
+      threadRef,
+      {
+        root,
+        focusComposer: () => {
+          frame = window.requestAnimationFrame(() => {
+            // Double-clicking a sidebar row opens its thread and its rename field in one gesture.
+            if (document.activeElement?.matches("[data-sidebar-row] input")) return;
+            focusComposer();
+          });
+        },
       },
-    });
+      drawerThreadRef,
+    );
     return () => {
       leave();
       if (frame !== undefined) window.cancelAnimationFrame(frame);
     };
   }, [
     threadRef,
+    drawerThreadRef,
     root,
     enabled,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Drawer visibility changes also restore focus after explicit open/close actions.

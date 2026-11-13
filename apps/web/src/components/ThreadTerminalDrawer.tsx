@@ -13,6 +13,7 @@ import {
   type TerminalSessionState,
 } from "@t3tools/client-runtime/state/terminal";
 import {
+  LayoutGrid,
   Plus,
   Square,
   SquareSplitHorizontal,
@@ -97,6 +98,15 @@ import {
   focusTerminalViewport,
   registerTerminalFocusTarget,
 } from "../lib/terminalFocus";
+import {
+  clampTerminalSplitRatio,
+  computeTerminalSplitLayout,
+  DEFAULT_TERMINAL_SPLIT_RATIO,
+  reconcileTerminalSplitTree,
+  summarizeSplitTreeDirections,
+  type TerminalSplitDivider,
+  type TerminalSplitNode,
+} from "../lib/terminalSplitTree";
 import {
   resolveTerminalFontPreference,
   resolveTerminalFontSizePreference,
@@ -1130,7 +1140,7 @@ function TerminalSessionViewport({
 }
 
 interface ThreadTerminalDrawerProps {
-  mode?: "drawer" | "panel";
+  mode?: "drawer" | "panel" | "canvas";
   threadRef: ScopedThreadRef;
   threadId: ThreadId;
   cwd: string;
@@ -1147,6 +1157,7 @@ interface ThreadTerminalDrawerProps {
   onSplitTerminal: () => void;
   onSplitTerminalVertical: () => void;
   onNewTerminal: () => void;
+  onSplitRatioChange?: ((groupId: string, path: string, ratio: number) => void) | undefined;
   splitShortcutLabel?: string | undefined;
   splitVerticalShortcutLabel?: string | undefined;
   newShortcutLabel?: string | undefined;
@@ -1205,8 +1216,11 @@ function TerminalActionButton({
 }
 
 function TerminalSplitPanes({
+  groupId,
   terminalIds,
   splitDirection,
+  splitTree,
+  onSplitRatioChange,
   activeTerminalId,
   terminalLabelById,
   resolveLaunchLocation,
@@ -1219,8 +1233,11 @@ function TerminalSplitPanes({
   visible,
   keybindings,
 }: {
+  groupId: string;
   terminalIds: readonly string[];
   splitDirection: "horizontal" | "vertical";
+  splitTree: TerminalSplitNode | null;
+  onSplitRatioChange?: ((groupId: string, path: string, ratio: number) => void) | undefined;
   activeTerminalId: string;
   terminalLabelById: ReadonlyMap<string, string>;
   resolveLaunchLocation: (terminalId: string) => TerminalLaunchLocation;
@@ -1233,36 +1250,84 @@ function TerminalSplitPanes({
   visible: boolean;
   keybindings: ResolvedKeybindingsConfig;
 }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    divider: TerminalSplitDivider;
+  } | null>(null);
+
+  const effectiveTree = reconcileTerminalSplitTree(splitTree, terminalIds, splitDirection);
+  const { leaves, dividers } = computeTerminalSplitLayout(effectiveTree);
+
+  const handleDividerPointerDown = (
+    divider: TerminalSplitDivider,
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!onSplitRatioChange || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStateRef.current = { pointerId: event.pointerId, divider };
+  };
+
+  const handleDividerPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !onSplitRatioChange) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    if (drag.divider.direction === "horizontal") {
+      const branchWidthPx = rect.width * drag.divider.branchWidth;
+      if (branchWidthPx <= 1) return;
+      const offsetPx = event.clientX - (rect.left + rect.width * drag.divider.branchLeft);
+      onSplitRatioChange(
+        groupId,
+        drag.divider.path,
+        clampTerminalSplitRatio(offsetPx / branchWidthPx),
+      );
+      return;
+    }
+    const branchHeightPx = rect.height * drag.divider.branchHeight;
+    if (branchHeightPx <= 1) return;
+    const offsetPx = event.clientY - (rect.top + rect.height * drag.divider.branchTop);
+    onSplitRatioChange(
+      groupId,
+      drag.divider.path,
+      clampTerminalSplitRatio(offsetPx / branchHeightPx),
+    );
+  };
+
+  const handleDividerPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStateRef.current?.pointerId === event.pointerId) {
+      dragStateRef.current = null;
+    }
+  };
+
   return (
-    <div
-      className="grid h-full w-full min-w-0 gap-0 overflow-hidden"
-      style={
-        splitDirection === "vertical"
-          ? {
-              gridTemplateRows: `repeat(${terminalIds.length}, minmax(0, 1fr))`,
-            }
-          : {
-              gridTemplateColumns: `repeat(${terminalIds.length}, minmax(0, 1fr))`,
-            }
-      }
-    >
-      {terminalIds.map((terminalId) => {
+    <div ref={containerRef} className="relative h-full w-full min-w-0 overflow-hidden">
+      {leaves.map((leaf) => {
+        const { terminalId } = leaf;
         const terminalLaunchLocation = resolveLaunchLocation(terminalId);
+        const isActive = terminalId === activeTerminalId;
         return (
           <div
             key={terminalId}
-            className={`min-h-0 min-w-0 ${
-              splitDirection === "vertical"
-                ? "border-t first:border-t-0"
-                : "border-l first:border-l-0"
-            } ${terminalId === activeTerminalId ? "border-border" : "border-border/70"}`}
+            data-terminal-pane={terminalId}
+            data-active={isActive ? "true" : undefined}
+            className="absolute min-h-0 min-w-0 overflow-hidden"
+            style={{
+              left: `${leaf.left * 100}%`,
+              top: `${leaf.top * 100}%`,
+              width: `${leaf.width * 100}%`,
+              height: `${leaf.height * 100}%`,
+            }}
             onPointerDown={() => {
-              if (terminalId !== activeTerminalId) {
+              if (!isActive) {
                 onActiveTerminalChange(terminalId);
               }
             }}
           >
-            <div className="h-full">
+            <div className="h-full w-full">
               <TerminalViewport
                 advancedTypography={advancedTypography}
                 threadRef={threadRef}
@@ -1282,6 +1347,56 @@ function TerminalSplitPanes({
                 keybindings={keybindings}
               />
             </div>
+            {leaves.length > 1 && isActive ? (
+              <div className="pointer-events-none absolute inset-0 z-10 ring-1 ring-inset ring-primary/35" />
+            ) : null}
+          </div>
+        );
+      })}
+
+      {dividers.map((divider) => {
+        const isHorizontalSplit = divider.direction === "horizontal";
+        return (
+          <div
+            key={`divider-${divider.path}`}
+            role="separator"
+            aria-orientation={isHorizontalSplit ? "vertical" : "horizontal"}
+            className={cn(
+              "group/divider absolute z-20 flex items-center justify-center touch-none select-none",
+              isHorizontalSplit
+                ? "w-2 -translate-x-1/2 cursor-col-resize"
+                : "h-2 -translate-y-1/2 cursor-row-resize",
+            )}
+            style={
+              isHorizontalSplit
+                ? {
+                    left: `${divider.lineLeft * 100}%`,
+                    top: `${divider.lineTop * 100}%`,
+                    height: `${divider.lineHeight * 100}%`,
+                  }
+                : {
+                    left: `${divider.lineLeft * 100}%`,
+                    top: `${divider.lineTop * 100}%`,
+                    width: `${divider.lineWidth * 100}%`,
+                  }
+            }
+            onPointerDown={(event) => handleDividerPointerDown(divider, event)}
+            onPointerMove={handleDividerPointerMove}
+            onPointerUp={handleDividerPointerEnd}
+            onPointerCancel={handleDividerPointerEnd}
+            onLostPointerCapture={handleDividerPointerEnd}
+            onDoubleClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onSplitRatioChange?.(groupId, divider.path, DEFAULT_TERMINAL_SPLIT_RATIO);
+            }}
+          >
+            <div
+              className={cn(
+                "pointer-events-none bg-border transition-colors group-hover/divider:bg-primary/70 group-active/divider:bg-primary",
+                isHorizontalSplit ? "h-full w-px" : "h-px w-full",
+              )}
+            />
           </div>
         );
       })}
@@ -1314,16 +1429,31 @@ function TerminalSidebarGroup({
     : (terminalGroup.terminalIds[0] ?? activeTerminalId);
   const terminalCount = terminalGroup.terminalIds.length;
   const isSplitGroup = terminalCount > 1;
-  const groupLabel = !isSplitGroup
-    ? "Single"
-    : terminalGroup.splitDirection === "vertical"
-      ? "Stacked"
-      : "Side by side";
-  const GroupIcon = !isSplitGroup
-    ? Square
-    : terminalGroup.splitDirection === "vertical"
-      ? SquareSplitVertical
-      : SquareSplitHorizontal;
+  const directionSummary = isSplitGroup
+    ? summarizeSplitTreeDirections(
+        reconcileTerminalSplitTree(
+          terminalGroup.splitTree,
+          terminalGroup.terminalIds,
+          terminalGroup.splitDirection ?? "horizontal",
+        ),
+      )
+    : "single";
+  const groupLabel =
+    directionSummary === "single"
+      ? "Single"
+      : directionSummary === "mixed"
+        ? "Split grid"
+        : directionSummary === "vertical"
+          ? "Stacked"
+          : "Side by side";
+  const GroupIcon =
+    directionSummary === "single"
+      ? Square
+      : directionSummary === "mixed"
+        ? LayoutGrid
+        : directionSummary === "vertical"
+          ? SquareSplitVertical
+          : SquareSplitHorizontal;
 
   return (
     <div className="pb-0.5">
@@ -1403,6 +1533,7 @@ export default function ThreadTerminalDrawer({
   onSplitTerminal,
   onSplitTerminalVertical,
   onNewTerminal,
+  onSplitRatioChange,
   splitShortcutLabel,
   splitVerticalShortcutLabel,
   newShortcutLabel,
@@ -1418,6 +1549,8 @@ export default function ThreadTerminalDrawer({
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
   const terminalArea = workspaceAreaProps("terminal", 5, "Terminal");
   const isPanel = mode === "panel";
+  const isCanvas = mode === "canvas";
+  const isFillContainer = isPanel || isCanvas;
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
     false,
@@ -1493,12 +1626,21 @@ export default function ThreadTerminalDrawer({
         terminalGroup.id.trim().length > 0
           ? terminalGroup.id.trim()
           : `group-${nextTerminalIds[0] ?? normalizedTerminalIds[0] ?? ""}`;
+      const fallbackDirection =
+        terminalGroup.splitDirection === "vertical" ? "vertical" : "horizontal";
+      const reconciledTree =
+        nextTerminalIds.length > 1
+          ? reconcileTerminalSplitTree(terminalGroup.splitTree, nextTerminalIds, fallbackDirection)
+          : null;
+      const directionSummary = summarizeSplitTreeDirections(reconciledTree);
       nextGroups.push({
         id: assignUniqueGroupId(baseGroupId),
         terminalIds: nextTerminalIds,
-        ...(terminalGroup.splitDirection === "vertical"
+        ...(directionSummary === "vertical" ||
+        (reconciledTree === null && terminalGroup.splitDirection === "vertical")
           ? { splitDirection: "vertical" as const }
           : {}),
+        ...(reconciledTree ? { splitTree: reconciledTree } : {}),
       });
     }
 
@@ -1551,11 +1693,13 @@ export default function ThreadTerminalDrawer({
       ? groupIndexById
       : (groupIndexByTerminalId.get(resolvedActiveTerminalId) ?? 0);
 
+  const activeGroup = resolvedTerminalGroups[resolvedActiveGroupIndex];
+  const activeGroupId = activeGroup?.id ?? activeTerminalGroupId;
   const visibleTerminalIds =
-    resolvedTerminalGroups[resolvedActiveGroupIndex]?.terminalIds ??
+    activeGroup?.terminalIds ??
     (normalizedTerminalIds.length > 0 ? [resolvedActiveTerminalId] : []);
-  const splitDirection =
-    resolvedTerminalGroups[resolvedActiveGroupIndex]?.splitDirection ?? "horizontal";
+  const splitDirection = activeGroup?.splitDirection ?? "horizontal";
+  const activeSplitTree = activeGroup?.splitTree ?? null;
   const hasTerminalSidebar = normalizedTerminalIds.length > 1;
   const showGroupHeaders =
     resolvedTerminalGroups.length > 1 ||
@@ -1681,7 +1825,7 @@ export default function ThreadTerminalDrawer({
     }
     // The column and window may have resized while the drawer was hidden and
     // not listening, so measure before the first visible paint.
-    const column = isPanel ? null : chatColumnOf(drawerRef.current);
+    const column = isFillContainer ? null : chatColumnOf(drawerRef.current);
     const onWindowResize = () => updateDrawerLayout(column, "window");
     onWindowResize();
     const header = column?.querySelector<HTMLElement>("[data-chat-header]");
@@ -1695,9 +1839,9 @@ export default function ThreadTerminalDrawer({
       stopObserving?.();
       window.removeEventListener("resize", onWindowResize);
     };
-  }, [isPanel, visible]);
+  }, [isFillContainer, visible]);
 
-  const resizeHandle = isPanel ? null : (
+  const resizeHandle = isFillContainer ? null : (
     <div
       className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize touch-none any-pointer-coarse:h-4"
       onPointerDown={handleResizePointerDown}
@@ -1717,13 +1861,21 @@ export default function ThreadTerminalDrawer({
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
         className={cn(
           "relative flex min-w-0 flex-col overflow-hidden bg-background",
-          isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
+          isFillContainer ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
         )}
-        style={isPanel ? undefined : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }}
+        style={
+          isFillContainer
+            ? undefined
+            : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }
+        }
       >
         {resizeHandle}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm text-muted-foreground">
-          <p>No terminal sessions for this thread yet.</p>
+          <p>
+            {mode === "canvas"
+              ? "No terminal sessions for this project yet."
+              : "No terminal sessions for this thread yet."}
+          </p>
           <Button
             size="xs"
             variant="outline"
@@ -1745,13 +1897,15 @@ export default function ThreadTerminalDrawer({
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
       className={cn(
         "relative flex min-w-0 flex-col overflow-hidden bg-background",
-        isPanel ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
+        isFillContainer ? "h-full flex-1" : "z-45 shrink-0 border-t border-border/80",
       )}
-      style={isPanel ? undefined : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }}
+      style={
+        isFillContainer ? undefined : { height: `var(${DRAG_HEIGHT_PROPERTY}, ${drawerHeight}px)` }
+      }
     >
       {resizeHandle}
 
-      {!hasTerminalSidebar && (
+      {!isCanvas && !hasTerminalSidebar && (
         <div className="pointer-events-none absolute right-2 top-2 z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
             <TerminalActionButton
@@ -1810,8 +1964,11 @@ export default function ThreadTerminalDrawer({
         >
           <div className="min-w-0 flex-1">
             <TerminalSplitPanes
+              groupId={activeGroupId}
               terminalIds={visibleTerminalIds}
               splitDirection={splitDirection}
+              splitTree={activeSplitTree}
+              onSplitRatioChange={onSplitRatioChange}
               activeTerminalId={resolvedActiveTerminalId}
               terminalLabelById={terminalLabelById}
               resolveLaunchLocation={resolveTerminalLaunchLocation}
@@ -1828,51 +1985,53 @@ export default function ThreadTerminalDrawer({
 
           {hasTerminalSidebar && (
             <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10">
-              <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
-                {/* Sits above the taller touch resize handle so its buttons keep their taps. */}
-                <div className="inline-flex h-full items-stretch any-pointer-coarse:relative any-pointer-coarse:z-30">
-                  <TerminalActionButton
-                    disabled={!canOperateTerminal}
-                    className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
-                      hasReachedSplitLimit
-                        ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                        : "hover:bg-accent/70"
-                    }`}
-                    onClick={onSplitTerminalAction}
-                    label={splitTerminalActionLabel}
-                  >
-                    <SquareSplitHorizontal className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    disabled={!canOperateTerminal}
-                    className={`inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors ${
-                      hasReachedSplitLimit
-                        ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                        : "hover:bg-accent/70"
-                    }`}
-                    onClick={onSplitTerminalVerticalAction}
-                    label={splitTerminalVerticalActionLabel}
-                  >
-                    <SquareSplitVertical className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    disabled={!canOperateTerminal}
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
-                    onClick={onNewTerminalAction}
-                    label={newTerminalActionLabel}
-                  >
-                    <Plus className="size-3.25" />
-                  </TerminalActionButton>
-                  <TerminalActionButton
-                    disabled={!canOperateTerminal}
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
-                    onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
-                    label={closeTerminalActionLabel}
-                  >
-                    <Trash2 className="size-3.25" />
-                  </TerminalActionButton>
+              {!isCanvas && (
+                <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
+                  {/* Sits above the taller touch resize handle so its buttons keep their taps. */}
+                  <div className="inline-flex h-full items-stretch any-pointer-coarse:relative any-pointer-coarse:z-30">
+                    <TerminalActionButton
+                      disabled={!canOperateTerminal}
+                      className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
+                        hasReachedSplitLimit
+                          ? "cursor-not-allowed opacity-64 hover:bg-transparent"
+                          : "hover:bg-accent/70"
+                      }`}
+                      onClick={onSplitTerminalAction}
+                      label={splitTerminalActionLabel}
+                    >
+                      <SquareSplitHorizontal className="size-3.25" />
+                    </TerminalActionButton>
+                    <TerminalActionButton
+                      disabled={!canOperateTerminal}
+                      className={`inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors ${
+                        hasReachedSplitLimit
+                          ? "cursor-not-allowed opacity-64 hover:bg-transparent"
+                          : "hover:bg-accent/70"
+                      }`}
+                      onClick={onSplitTerminalVerticalAction}
+                      label={splitTerminalVerticalActionLabel}
+                    >
+                      <SquareSplitVertical className="size-3.25" />
+                    </TerminalActionButton>
+                    <TerminalActionButton
+                      disabled={!canOperateTerminal}
+                      className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                      onClick={onNewTerminalAction}
+                      label={newTerminalActionLabel}
+                    >
+                      <Plus className="size-3.25" />
+                    </TerminalActionButton>
+                    <TerminalActionButton
+                      disabled={!canOperateTerminal}
+                      className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                      onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
+                      label={closeTerminalActionLabel}
+                    >
+                      <Trash2 className="size-3.25" />
+                    </TerminalActionButton>
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
                 {resolvedTerminalGroups.map((terminalGroup) => (

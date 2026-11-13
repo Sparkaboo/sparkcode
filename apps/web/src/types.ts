@@ -24,6 +24,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import { videoMimeType } from "@t3tools/shared/video";
+import type { TerminalSplitNode } from "./lib/terminalSplitTree";
 
 export { videoMimeType } from "@t3tools/shared/video";
 
@@ -33,13 +34,14 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "term-1";
-export const MAX_TERMINALS_PER_GROUP = 4;
+export const MAX_TERMINALS_PER_GROUP = 8;
 export type ProjectScript = ContractProjectScript;
 
 export interface ThreadTerminalGroup {
   id: string;
   terminalIds: string[];
   splitDirection?: "horizontal" | "vertical";
+  splitTree?: TerminalSplitNode;
 }
 
 export interface ChatImageAttachment extends ContractChatImageAttachment {

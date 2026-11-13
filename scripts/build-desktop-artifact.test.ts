@@ -539,15 +539,32 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
-          owner: "pingdotgg",
-          repo: "t3code",
+          owner: "Sparkaboo",
+          repo: "sparkcode",
           releaseType: "release",
         },
       ]);
+
+      const upstreamBlocked = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+          ),
+        ),
+      );
+      assert.isNull(upstreamBlocked.publish);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "Sparkaboo/sparkcode" } }),
         ),
       ),
     ),
@@ -1490,7 +1507,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.sparkaboo.sparkcode",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1513,7 +1530,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.sparkaboo.sparkcode</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");

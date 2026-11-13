@@ -22,13 +22,17 @@ describe("terminalUiStateStore actions", () => {
     });
   });
 
-  it("caps splits at four terminals per group", () => {
+  it("caps splits at eight terminals per group and preserves independent 2D split directions", () => {
     const store = useTerminalUiStateStore.getState();
     store.splitTerminal(THREAD_REF, "terminal-2");
-    store.splitTerminal(THREAD_REF, "terminal-3");
+    store.splitTerminalVertical(THREAD_REF, "terminal-3");
     store.splitTerminal(THREAD_REF, "terminal-4");
     store.splitTerminal(THREAD_REF, "terminal-5");
     store.splitTerminal(THREAD_REF, "terminal-6");
+    store.splitTerminal(THREAD_REF, "terminal-7");
+    store.splitTerminal(THREAD_REF, "terminal-8");
+    store.splitTerminal(THREAD_REF, "terminal-9");
+    store.splitTerminal(THREAD_REF, "terminal-10");
 
     const terminalUiState = selectThreadTerminalUiState(
       useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
@@ -39,13 +43,25 @@ describe("terminalUiStateStore actions", () => {
       "terminal-3",
       "terminal-4",
       "terminal-5",
+      "terminal-6",
+      "terminal-7",
+      "terminal-8",
+      "terminal-9",
     ]);
-    expect(terminalUiState.terminalGroups).toEqual([
-      {
-        id: "group-terminal-2",
-        terminalIds: ["terminal-2", "terminal-3", "terminal-4", "terminal-5"],
+    expect(terminalUiState.terminalGroups).toHaveLength(1);
+    const group = terminalUiState.terminalGroups[0]!;
+    expect(group.id).toBe("group-terminal-2");
+    expect(group.terminalIds).toHaveLength(8);
+    expect(group.splitTree).toMatchObject({
+      type: "branch",
+      direction: "vertical",
+      first: { type: "leaf", terminalId: "terminal-2" },
+      second: {
+        type: "branch",
+        direction: "horizontal",
+        first: { type: "leaf", terminalId: "terminal-3" },
       },
-    ]);
+    });
   });
 
   it("keeps state isolated per environment when raw thread ids collide", () => {
@@ -181,5 +197,54 @@ describe("terminalUiStateStore actions", () => {
         THREAD_REF,
       ).terminalIds,
     ).toEqual(["term-2", "term-1"]);
+  });
+
+  it("preserves project-group terminal sessions across orphan sweeps and closes open canvas views on closeAllProjectGroupTerminals", () => {
+    const groupRef = scopeThreadRef(
+      "environment-a" as never,
+      ThreadId.make("project-group-proj-1"),
+    );
+    const store = useTerminalUiStateStore.getState();
+    store.ensureTerminal(groupRef, "dev-server", { open: true, active: true });
+    store.ensureTerminal(THREAD_REF, "thread-shell", { open: true, active: true });
+
+    store.removeOrphanedTerminalUiStates(new Set());
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        THREAD_REF,
+      ).terminalIds,
+    ).toEqual([]);
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        groupRef,
+      ),
+    ).toMatchObject({
+      terminalOpen: true,
+      terminalIds: ["dev-server"],
+    });
+
+    store.closeAllProjectGroupTerminals();
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        groupRef,
+      ),
+    ).toMatchObject({
+      terminalOpen: false,
+      terminalIds: ["dev-server"],
+    });
+
+    store.removeOrphanedTerminalUiStates(new Set(), new Set());
+
+    expect(
+      selectThreadTerminalUiState(
+        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
+        groupRef,
+      ).terminalIds,
+    ).toEqual([]);
   });
 });

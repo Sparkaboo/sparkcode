@@ -434,9 +434,9 @@
       }
 
       #boot-shell-logo {
-        width: 64px;
-        height: 64px;
-        object-fit: contain;
+        width: 44px;
+        height: 44px;
+        display: block;
       }
 
       /* App CSS locks body and #root scrolling once main loads, so the error screen scrolls itself. */
@@ -675,13 +675,23 @@
       if (desktopDisplayName) document.title = desktopDisplayName;
     </script>
     <!-- vite.config.ts stamps the web build's channel into this title. -->
-    <title>T3 Code</title>
+    <title>SparkCode</title>
   </head>
   <body>
     <div id="root">
       <div id="boot-shell">
-        <div id="boot-shell-card" aria-label="T3 Code splash screen">
-          <img id="boot-shell-logo" src="/apple-touch-icon.png" alt="T3 Code" />
+        <div id="boot-shell-card" aria-label="SparkCode splash screen">
+          <svg
+            id="boot-shell-logo"
+            viewBox="16.9 19.9 66.2 60.2"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M16.9 50H37.3L57.7 19.9H37.3L16.9 50ZM62.7 50H83.1L62.7 80.1H42.3L62.7 50ZM50 37.7L52.9 47.1L62.7 50L52.9 52.9L50 62.3L47.1 52.9L37.3 50L47.1 47.1L50 37.7Z"
+              fill="currentColor"
+            />
+          </svg>
         </div>
       </div>
     </div>

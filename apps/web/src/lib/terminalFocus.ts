@@ -130,12 +130,16 @@ export function focusTerminalOnNavigation(threadRef: ScopedThreadRef, terminalId
 export function restoreFocusOnThreadEnter(
   threadRef: ScopedThreadRef,
   content: { readonly root: HTMLElement; readonly focusComposer: () => void },
+  drawerThreadRef: ScopedThreadRef | null = threadRef,
 ): () => void {
   const threadKey = scopedThreadKey(threadRef);
+  const effectiveDrawerRef = drawerThreadRef ?? threadRef;
+  const drawerKey = scopedThreadKey(effectiveDrawerRef);
+  const isCanvasGroupDrawer = drawerKey !== threadKey;
   const requestedByHandler =
     navigationRequestThreadKey === threadKey ||
     (lastEnteredThreadByRoot.get(content.root) === threadKey &&
-      pendingFocus?.threadKey === threadKey);
+      (pendingFocus?.threadKey === threadKey || pendingFocus?.threadKey === drawerKey));
   if (!requestedByHandler) pendingFocus = null;
   lastEnteredThreadByRoot.set(content.root, threadKey);
   navigationRequestThreadKey = null;
@@ -146,8 +150,10 @@ export function restoreFocusOnThreadEnter(
     if (!element) return;
     const terminal = Array.from(focusTargets).find((target) => target.element?.contains(element));
     if (terminal) {
-      if (scopedThreadKey(terminal.threadRef) === threadKey)
+      const targetKey = scopedThreadKey(terminal.threadRef);
+      if (targetKey === threadKey || targetKey === drawerKey) {
         lastThreadFocus.set(threadKey, { terminalId: terminal.terminalId });
+      }
     } else if (
       content.root.contains(element) &&
       element.closest('[data-workspace-area="composer"]')
@@ -159,26 +165,32 @@ export function restoreFocusOnThreadEnter(
   if (!requestedByHandler) {
     const drawer = selectThreadTerminalUiState(
       useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
-      threadRef,
+      effectiveDrawerRef,
     );
     const panel = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef);
     const panelTerminal = panel.isOpen
       ? panel.surfaces.find((surface) => surface.id === panel.activeSurfaceId)
       : null;
-    if (previous === "composer") {
+    const previousInDrawer =
+      previous !== undefined &&
+      previous !== "composer" &&
+      drawer.terminalOpen &&
+      drawer.terminalGroups
+        .find((group) => group.id === drawer.activeTerminalGroupId)
+        ?.terminalIds.includes(previous.terminalId) === true;
+    const previousInPanel =
+      previous !== undefined &&
+      previous !== "composer" &&
+      panelTerminal?.kind === "terminal" &&
+      panelTerminal.terminalIds.includes(previous.terminalId);
+    if (previous === "composer" && !(isCanvasGroupDrawer && drawer.terminalOpen)) {
       content.focusComposer();
-    } else if (
-      previous &&
-      ((drawer.terminalOpen &&
-        drawer.terminalGroups
-          .find((group) => group.id === drawer.activeTerminalGroupId)
-          ?.terminalIds.includes(previous.terminalId)) ||
-        (panelTerminal?.kind === "terminal" &&
-          panelTerminal.terminalIds.includes(previous.terminalId)))
-    ) {
+    } else if (previous !== undefined && previous !== "composer" && previousInDrawer) {
+      focusTerminal(effectiveDrawerRef, previous.terminalId);
+    } else if (previous !== undefined && previous !== "composer" && previousInPanel) {
       focusTerminal(threadRef, previous.terminalId);
     } else if (drawer.terminalOpen && drawer.activeTerminalId) {
-      focusTerminal(threadRef, drawer.activeTerminalId);
+      focusTerminal(effectiveDrawerRef, drawer.activeTerminalId);
     } else content.focusComposer();
   }
   if (requestedByHandler) remember();

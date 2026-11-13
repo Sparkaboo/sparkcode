@@ -1,4 +1,5 @@
 import { attachSidebarTree } from "../lib/sidebarTree";
+import { scopeProjectGroupTerminalRef } from "../lib/projectGroupTerminal";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
@@ -113,6 +114,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { resolveProjectExpanded, useUiStateStore } from "../uiStateStore";
+import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import {
   getThreadKeysToDeselectAfterDelete,
   useThreadSelectionStore,
@@ -129,7 +131,7 @@ import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { updateClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -1461,6 +1463,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   })();
 
   const navigateToThread = (threadRef: ScopedThreadRef) => {
+    useTerminalUiStateStore.getState().closeAllProjectGroupTerminals();
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
@@ -1497,6 +1500,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
 
   const navigateToDraft = (draftId: DraftId) => {
+    useTerminalUiStateStore.getState().closeAllProjectGroupTerminals();
     clearSelection();
     if (isMobile) {
       setOpenMobile(false);
@@ -2896,6 +2900,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   );
 
+  const routeProjectId =
+    newThreadContext.activeThread?.projectId ??
+    newThreadContext.activeDraftThread?.projectId ??
+    null;
+  const routeGroupTerminalRef =
+    routeThreadRef !== null && routeProjectId !== null
+      ? scopeProjectGroupTerminalRef(routeThreadRef.environmentId, routeProjectId)
+      : null;
+
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to window keydown for thread navigation shortcuts using the current thread list
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -2904,7 +2917,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       }
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
-        context: threadShortcutContext(routeThreadRef),
+        context: threadShortcutContext(routeThreadRef, routeGroupTerminalRef),
       });
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
@@ -2936,12 +2949,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    routeGroupTerminalRef,
     routeRowThreadKey,
     routeThreadRef,
     threadByKey,
   ]);
 
-  const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
+  const showJumpHints = useThreadJumpHintsVisible(
+    keybindings,
+    routeThreadRef,
+    routeGroupTerminalRef,
+  );
+
+  const handleToggleGroupByProject = useStableCallback(() => {
+    clearSelection();
+    void updateClientSettings({ boringSidebarEnabled: !boringSidebarEnabled });
+  });
 
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     if (
@@ -2983,6 +3006,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
               hasProjects={projectGroups.length > 0}
+              groupedByProject={boringSidebarEnabled}
+              onToggleGroupByProject={handleToggleGroupByProject}
               projectScope={
                 <Combobox
                   items={projectScopeItems}

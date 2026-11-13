@@ -8,9 +8,11 @@ import {
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { PlusIcon, SquareSplitHorizontalIcon, SquareSplitVerticalIcon, XIcon } from "lucide-react";
 import { memo, useEffect } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { parseProjectIdFromTerminalThreadId } from "../lib/projectGroupTerminal";
 import type { TerminalContextSelection } from "../lib/terminalContext";
 import { focusActiveDrawerTerminal, focusTerminal } from "../lib/terminalFocus";
 import { cn } from "~/lib/utils";
@@ -23,9 +25,13 @@ import { useProject, useQuietThreadShell } from "../state/entities";
 import { useEnvironmentScope } from "../state/session";
 import { useKnownTerminalSessions } from "../state/terminalSessions";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
+import { MAX_TERMINALS_PER_GROUP } from "../types";
+import { resolveTerminalWorktreePath } from "./ChatView.logic";
+import { ProjectFavicon } from "./ProjectFavicon";
 import { useThreadTerminalActions } from "./terminal/useThreadTerminalActions";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { resolveTerminalWorktreePath } from "./ChatView.logic";
+import { Button } from "./ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 /** Where a drawer or panel opens new terminals when a script run overrides the thread's own. */
 export type PersistentTerminalLaunchContext = {
@@ -74,6 +80,7 @@ interface TerminalLaunchLocationWithEnv {
 }
 
 interface PersistentThreadTerminalDrawerProps {
+  mode?: "drawer" | "canvas";
   threadRef: { environmentId: EnvironmentId; threadId: ThreadId };
   threadId: ThreadId;
   active: boolean;
@@ -88,6 +95,7 @@ interface PersistentThreadTerminalDrawerProps {
 }
 
 export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDrawer({
+  mode = "drawer",
   threadRef,
   threadId,
   active,
@@ -104,11 +112,14 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
   const terminalActions = useThreadTerminalActions(threadRef);
   const serverThread = useQuietThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
+  const groupProjectId = parseProjectIdFromTerminalThreadId(threadRef.threadId);
   const projectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
     : draftThread
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+      : groupProjectId
+        ? scopeProjectRef(threadRef.environmentId, groupProjectId)
+        : null;
   const project = useProject(projectRef);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
@@ -160,6 +171,9 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
   const storeNewTerminal = useTerminalUiStateStore((state) => state.newTerminal);
   const storeSetActiveTerminal = useTerminalUiStateStore((state) => state.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((state) => state.closeTerminal);
+  const storeSetTerminalSplitRatio = useTerminalUiStateStore(
+    (state) => state.setTerminalSplitRatio,
+  );
   const reconcileTerminalIds = useTerminalUiStateStore((state) => state.reconcileTerminalIds);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reconciles the terminal UI store's ids with the server's terminal list when they diverge
@@ -174,7 +188,10 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     }
     reconcileTerminalIds(threadRef, serverOrderedTerminalIds);
   }, [reconcileTerminalIds, serverOrderedTerminalIds, terminalUiState.terminalIds, threadRef]);
-  const worktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const worktreePath =
+    groupProjectId !== null
+      ? null
+      : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const effectiveWorktreePath = launchContext !== null ? launchContext.worktreePath : worktreePath;
   const cwd =
     launchContext?.cwd ??
@@ -214,6 +231,9 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
   const createNewTerminal = useStableCallback(() =>
     launchDrawerTerminal((terminalId) => storeNewTerminal(threadRef, terminalId)),
   );
+  const setTerminalSplitRatio = useStableCallback((groupId: string, path: string, ratio: number) =>
+    storeSetTerminalSplitRatio(threadRef, groupId, path, ratio),
+  );
 
   const activateTerminal = (terminalId: string) => {
     storeSetActiveTerminal(threadRef, terminalId);
@@ -226,6 +246,10 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
     storeCloseTerminal(threadRef, terminalId);
     if (visible) focusActiveDrawerTerminal(threadRef);
   });
+  const closeActiveTerminal = useStableCallback(() => {
+    if (!terminalUiState.activeTerminalId) return;
+    closeTerminal(terminalUiState.activeTerminalId);
+  });
 
   const handleAddTerminalContext = (selection: TerminalContextSelection) => {
     if (!visible) {
@@ -236,6 +260,165 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
 
   if (!project || (!terminalUiState.terminalOpen && !active) || !cwd) {
     return null;
+  }
+
+  const activeGroup =
+    terminalUiState.terminalGroups.find(
+      (group) => group.id === terminalUiState.activeTerminalGroupId,
+    ) ??
+    terminalUiState.terminalGroups.find((group) =>
+      group.terminalIds.includes(terminalUiState.activeTerminalId),
+    ) ??
+    null;
+  const hasReachedSplitLimit = (activeGroup?.terminalIds.length ?? 0) >= MAX_TERMINALS_PER_GROUP;
+
+  if (mode === "canvas") {
+    return (
+      <div
+        data-project-group-terminal-canvas
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background",
+          !visible && "hidden",
+        )}
+      >
+        <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border/80 bg-background px-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <ProjectFavicon project={project} className="size-3.5 shrink-0" />
+            <span className="truncate text-xs font-semibold text-foreground">{project.title}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">· 项目终端</span>
+            <span className="hidden truncate rounded bg-muted/60 px-1.5 py-0.5 font-mono text-2xs text-muted-foreground md:inline">
+              {cwd}
+            </span>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={
+                      splitShortcutLabel ? `左右分屏 (${splitShortcutLabel})` : "左右分屏"
+                    }
+                    disabled={!canOperateTerminal || hasReachedSplitLimit}
+                    onClick={splitTerminal}
+                  />
+                }
+              >
+                <SquareSplitHorizontalIcon className="size-3.25" />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                {hasReachedSplitLimit
+                  ? `左右分屏 (最多 ${MAX_TERMINALS_PER_GROUP} 个分屏)`
+                  : splitShortcutLabel
+                    ? `左右分屏 (${splitShortcutLabel})`
+                    : "左右分屏"}
+              </TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={
+                      splitVerticalShortcutLabel
+                        ? `上下分屏 (${splitVerticalShortcutLabel})`
+                        : "上下分屏"
+                    }
+                    disabled={!canOperateTerminal || hasReachedSplitLimit}
+                    onClick={splitTerminalVertical}
+                  />
+                }
+              >
+                <SquareSplitVerticalIcon className="size-3.25" />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                {hasReachedSplitLimit
+                  ? `上下分屏 (最多 ${MAX_TERMINALS_PER_GROUP} 个分屏)`
+                  : splitVerticalShortcutLabel
+                    ? `上下分屏 (${splitVerticalShortcutLabel})`
+                    : "上下分屏"}
+              </TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={newShortcutLabel ? `新建终端 (${newShortcutLabel})` : "新建终端"}
+                    disabled={!canOperateTerminal}
+                    onClick={createNewTerminal}
+                  />
+                }
+              >
+                <PlusIcon className="size-3.25" />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                {newShortcutLabel ? `新建终端 (${newShortcutLabel})` : "新建终端"}
+              </TooltipPopup>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost-destructive"
+                    size="icon-xs"
+                    aria-label={
+                      closeShortcutLabel ? `关闭当前终端 (${closeShortcutLabel})` : "关闭当前终端"
+                    }
+                    disabled={!canOperateTerminal || !terminalUiState.activeTerminalId}
+                    onClick={closeActiveTerminal}
+                  />
+                }
+              >
+                <XIcon className="size-3.25" />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                {closeShortcutLabel ? `关闭当前终端 (${closeShortcutLabel})` : "关闭当前终端"}
+              </TooltipPopup>
+            </Tooltip>
+          </div>
+        </div>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <ThreadTerminalDrawer
+            mode="canvas"
+            threadRef={threadRef}
+            threadId={threadId}
+            cwd={cwd}
+            worktreePath={effectiveWorktreePath}
+            runtimeEnv={runtimeEnv}
+            visible={visible}
+            height={terminalUiState.terminalHeight}
+            composerHeight={0}
+            terminalIds={
+              canOperateTerminal ? terminalUiState.terminalIds : serverOrderedTerminalIds
+            }
+            activeTerminalId={terminalUiState.activeTerminalId}
+            terminalGroups={terminalUiState.terminalGroups}
+            activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
+            onSplitTerminal={splitTerminal}
+            onSplitTerminalVertical={splitTerminalVertical}
+            onNewTerminal={createNewTerminal}
+            onSplitRatioChange={setTerminalSplitRatio}
+            splitShortcutLabel={visible ? splitShortcutLabel : undefined}
+            splitVerticalShortcutLabel={visible ? splitVerticalShortcutLabel : undefined}
+            newShortcutLabel={visible ? newShortcutLabel : undefined}
+            closeShortcutLabel={visible ? closeShortcutLabel : undefined}
+            keybindings={keybindings}
+            onActiveTerminalChange={activateTerminal}
+            onCloseTerminal={closeTerminal}
+            onHeightChange={setTerminalHeight}
+            onAddTerminalContext={handleAddTerminalContext}
+            terminalLabelsById={terminalLabelsById}
+            terminalLaunchLocationsById={terminalLaunchLocationsById}
+          />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -266,6 +449,7 @@ export const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerm
           onSplitTerminal={splitTerminal}
           onSplitTerminalVertical={splitTerminalVertical}
           onNewTerminal={createNewTerminal}
+          onSplitRatioChange={setTerminalSplitRatio}
           splitShortcutLabel={visible ? splitShortcutLabel : undefined}
           splitVerticalShortcutLabel={visible ? splitVerticalShortcutLabel : undefined}
           newShortcutLabel={visible ? newShortcutLabel : undefined}
@@ -318,6 +502,10 @@ export const PersistentThreadTerminalPanel = memo(function PersistentThreadTermi
   newShortcutLabel,
   closeShortcutLabel,
 }: PersistentThreadTerminalPanelProps) {
+  const storeSetTerminalSplitRatio = useRightPanelStore((state) => state.setTerminalSplitRatio);
+  const setTerminalSplitRatio = useStableCallback((_groupId: string, path: string, ratio: number) =>
+    storeSetTerminalSplitRatio(threadRef, surface.id, path, ratio),
+  );
   const serverThread = useQuietThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
   const projectRef = serverThread
@@ -394,12 +582,14 @@ export const PersistentThreadTerminalPanel = memo(function PersistentThreadTermi
           id: surface.id,
           terminalIds: surface.terminalIds,
           ...(surface.splitDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
+          ...(surface.splitTree ? { splitTree: surface.splitTree } : {}),
         },
       ]}
       activeTerminalGroupId={surface.id}
       onSplitTerminal={onSplitTerminal}
       onSplitTerminalVertical={onSplitTerminalVertical}
       onNewTerminal={onNewTerminal}
+      onSplitRatioChange={setTerminalSplitRatio}
       splitShortcutLabel={splitShortcutLabel}
       splitVerticalShortcutLabel={splitVerticalShortcutLabel}
       newShortcutLabel={newShortcutLabel}

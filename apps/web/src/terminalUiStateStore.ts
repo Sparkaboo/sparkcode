@@ -2,7 +2,16 @@ import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/e
 import { type ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { isProjectGroupTerminalThreadId } from "./lib/projectGroupTerminal";
 import { resolveStorage } from "./lib/storage";
+import {
+  cloneTerminalSplitTree,
+  reconcileTerminalSplitTree,
+  splitTerminalLeafInTree,
+  summarizeSplitTreeDirections,
+  terminalSplitTreesEqual,
+  updateTerminalSplitRatioAtPath,
+} from "./lib/terminalSplitTree";
 import {
   DEFAULT_THREAD_TERMINAL_HEIGHT,
   DEFAULT_THREAD_TERMINAL_ID,
@@ -115,10 +124,20 @@ function normalizeTerminalGroups(
       group.id.trim().length > 0
         ? group.id.trim()
         : fallbackGroupId(groupTerminalIds[0] ?? terminalIds[0] ?? "");
+    const splitTree =
+      groupTerminalIds.length > 1
+        ? reconcileTerminalSplitTree(
+            group.splitTree,
+            groupTerminalIds,
+            group.splitDirection ?? "horizontal",
+          )
+        : null;
+    const summaryDirection = summarizeSplitTreeDirections(splitTree);
     nextGroups.push({
       id: assignUniqueGroupId(baseGroupId, usedGroupIds),
       terminalIds: groupTerminalIds,
-      ...(group.splitDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
+      ...(summaryDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
+      ...(splitTree && splitTree.type === "branch" ? { splitTree } : {}),
     });
   }
 
@@ -151,6 +170,9 @@ function terminalGroupsEqual(left: ThreadTerminalGroup[], right: ThreadTerminalG
     if (
       (leftGroup.splitDirection ?? "horizontal") !== (rightGroup.splitDirection ?? "horizontal")
     ) {
+      return false;
+    }
+    if (!terminalSplitTreesEqual(leftGroup.splitTree, rightGroup.splitTree)) {
       return false;
     }
     if (!arraysEqual(leftGroup.terminalIds, rightGroup.terminalIds)) return false;
@@ -240,6 +262,7 @@ function copyTerminalGroups(groups: ThreadTerminalGroup[]): ThreadTerminalGroup[
     id: group.id,
     terminalIds: [...group.terminalIds],
     ...(group.splitDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
+    ...(group.splitTree ? { splitTree: cloneTerminalSplitTree(group.splitTree) } : {}),
   }));
 }
 
@@ -315,6 +338,7 @@ function upsertTerminalIntoGroups(
     return normalized;
   }
 
+  const previousGroupTerminalIds = [...destinationGroup.terminalIds];
   if (!destinationTerminalIdSet.has(terminalId)) {
     const anchorIndex = destinationGroup.terminalIds.indexOf(normalized.activeTerminalId);
     if (anchorIndex >= 0) {
@@ -323,7 +347,17 @@ function upsertTerminalIntoGroups(
       destinationGroup.terminalIds.push(terminalId);
     }
   }
-  if (splitDirection === "vertical") {
+
+  const nextSplitTree = splitTerminalLeafInTree({
+    tree: destinationGroup.splitTree,
+    existingTerminalIds: previousGroupTerminalIds,
+    anchorTerminalId: normalized.activeTerminalId,
+    newTerminalId: terminalId,
+    direction: splitDirection,
+    fallbackDirection: destinationGroup.splitDirection ?? "horizontal",
+  });
+  destinationGroup.splitTree = nextSplitTree;
+  if (summarizeSplitTreeDirections(nextSplitTree) === "vertical") {
     destinationGroup.splitDirection = "vertical";
   } else {
     delete destinationGroup.splitDirection;
@@ -337,6 +371,31 @@ function upsertTerminalIntoGroups(
     terminalGroups,
     activeTerminalGroupId: destinationGroup.id,
   });
+}
+
+function setThreadTerminalSplitRatio(
+  state: ThreadTerminalUiState,
+  groupId: string,
+  path: string,
+  ratio: number,
+): ThreadTerminalUiState {
+  const normalized = normalizeThreadTerminalUiState(state);
+  let changed = false;
+  const terminalGroups = normalized.terminalGroups.map((group) => {
+    if (group.id !== groupId || group.terminalIds.length <= 1) return group;
+    const baseTree = reconcileTerminalSplitTree(
+      group.splitTree,
+      group.terminalIds,
+      group.splitDirection ?? "horizontal",
+    );
+    if (!baseTree || baseTree.type === "leaf") return group;
+    const nextTree = updateTerminalSplitRatioAtPath(baseTree, path, ratio);
+    if (terminalSplitTreesEqual(group.splitTree, nextTree)) return group;
+    changed = true;
+    return { ...group, splitTree: nextTree };
+  });
+  if (!changed) return normalized;
+  return normalizeThreadTerminalUiState({ ...normalized, terminalGroups });
 }
 
 function setThreadTerminalOpen(state: ThreadTerminalUiState, open: boolean): ThreadTerminalUiState {
@@ -562,7 +621,14 @@ interface TerminalUiStateStoreState {
   terminalUiStateByThreadKey: Record<string, ThreadTerminalUiState>;
   suppressedTerminalIdsByThreadKey: Record<string, string[]>;
   setTerminalOpen: (threadRef: ScopedThreadRef, open: boolean) => void;
+  closeAllProjectGroupTerminals: () => void;
   setTerminalHeight: (threadRef: ScopedThreadRef, height: number) => void;
+  setTerminalSplitRatio: (
+    threadRef: ScopedThreadRef,
+    groupId: string,
+    path: string,
+    ratio: number,
+  ) => void;
   splitTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
   splitTerminalVertical: (threadRef: ScopedThreadRef, terminalId: string) => void;
   newTerminal: (threadRef: ScopedThreadRef, terminalId: string) => void;
@@ -576,7 +642,10 @@ interface TerminalUiStateStoreState {
   reconcileTerminalIds: (threadRef: ScopedThreadRef, nextIds: string[]) => void;
   clearTerminalUiState: (threadRef: ScopedThreadRef) => void;
   removeTerminalUiState: (threadRef: ScopedThreadRef) => void;
-  removeOrphanedTerminalUiStates: (activeThreadKeys: Set<string>) => void;
+  removeOrphanedTerminalUiStates: (
+    activeThreadKeys: Set<string>,
+    activeProjectGroupKeys?: ReadonlySet<string>,
+  ) => void;
 }
 
 export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
@@ -635,8 +704,25 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               : undefined,
           );
         },
+        closeAllProjectGroupTerminals: () =>
+          set((state) => {
+            let nextByKey: Record<string, ThreadTerminalUiState> | null = null;
+            for (const [key, entry] of Object.entries(state.terminalUiStateByThreadKey)) {
+              if (!entry.terminalOpen) continue;
+              const parsed = parseScopedThreadKey(key);
+              if (!parsed || !isProjectGroupTerminalThreadId(parsed.threadId)) continue;
+              nextByKey ??= { ...state.terminalUiStateByThreadKey };
+              nextByKey[key] = setThreadTerminalOpen(entry, false);
+            }
+            if (nextByKey === null) return state;
+            return { terminalUiStateByThreadKey: nextByKey };
+          }),
         setTerminalHeight: (threadRef, height) =>
           updateTerminal(threadRef, (state) => setThreadTerminalHeight(state, height)),
+        setTerminalSplitRatio: (threadRef, groupId, path, ratio) =>
+          updateTerminal(threadRef, (state) =>
+            setThreadTerminalSplitRatio(state, groupId, path, ratio),
+          ),
         splitTerminal: (threadRef, terminalId) =>
           updateTerminal(threadRef, (state) => splitThreadTerminal(state, terminalId), {
             terminalId,
@@ -739,13 +825,20 @@ export const useTerminalUiStateStore = create<TerminalUiStateStoreState>()(
               ),
             };
           }),
-        removeOrphanedTerminalUiStates: (activeThreadKeys) =>
+        removeOrphanedTerminalUiStates: (activeThreadKeys, activeProjectGroupKeys) =>
           set((state) => {
             const orphanedIds = new Set(
               [
                 ...Object.keys(state.terminalUiStateByThreadKey),
                 ...Object.keys(state.suppressedTerminalIdsByThreadKey),
-              ].filter((key) => !activeThreadKeys.has(key)),
+              ].filter((key) => {
+                if (activeThreadKeys.has(key)) return false;
+                const parsed = parseScopedThreadKey(key);
+                if (parsed && isProjectGroupTerminalThreadId(parsed.threadId)) {
+                  return activeProjectGroupKeys !== undefined && !activeProjectGroupKeys.has(key);
+                }
+                return true;
+              }),
             );
             if (orphanedIds.size === 0) {
               return state;

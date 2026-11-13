@@ -133,7 +133,7 @@ const withIdentity = <A, E, R>(
               input.legacyPathProbeError
                 ? Effect.fail(input.legacyPathProbeError)
                 : Effect.succeed(
-                    input.legacyPathExists === true && /T3 Code \((Alpha|Dev)\)/.test(path),
+                    input.legacyPathExists === true && /SparkCode \((Alpha|Dev)\)/.test(path),
                   ),
             readFileString: () =>
               Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
@@ -148,13 +148,13 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
-  it.effect("isolates the V2 profile even when the legacy V1 profile exists", () =>
+  it.effect("isolates the SparkCode profile even when the legacy profile exists", () =>
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         const userDataPath = yield* identity.resolveUserDataPath;
 
-        assert.equal(userDataPath, "/Users/alice/Library/Application Support/t3code-v2");
+        assert.equal(userDataPath, "/Users/alice/Library/Application Support/sparkcode");
       }),
       { legacyPathExists: true },
     ),
@@ -166,7 +166,7 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         assert.equal(
           yield* identity.resolveUserDataPath,
-          "/Users/alice/Library/Application Support/T3 Code (Dev)",
+          "/Users/alice/Library/Application Support/SparkCode (Dev)",
         );
       }),
       {
@@ -177,34 +177,39 @@ describe("DesktopAppIdentity", () => {
   );
 
   it.effect.each([
-    { stage: "Beta", environment: {} },
+    { stage: "Beta", expectedDisplayName: "SparkCode", environment: {} },
     {
       stage: "Nightly",
+      expectedDisplayName: "SparkCode (Nightly)",
       environment: { appVersion: "0.0.43-nightly.20260929.2428" },
     },
     {
       stage: "Dev",
+      expectedDisplayName: "SparkCode (Dev)",
       environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
     },
-  ])("uses a valid native User-Agent product name for $stage", ({ stage, environment }) => {
-    const calls: ElectronAppCalls = {
-      setAboutPanelOptions: [],
-      setDockIcon: [],
-      setName: [],
-    };
+  ])(
+    "uses a valid native User-Agent product name for $stage",
+    ({ stage, expectedDisplayName, environment }) => {
+      const calls: ElectronAppCalls = {
+        setAboutPanelOptions: [],
+        setDockIcon: [],
+        setName: [],
+      };
 
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        yield* identity.configure;
+      return withIdentity(
+        Effect.gen(function* () {
+          const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+          yield* identity.configure;
 
-        const runtimeName = calls.setName[0];
-        assert.isDefined(runtimeName);
-        assert.equal(runtimeName, `T3 Code ${stage}`);
-        assert.match(runtimeName.replaceAll(" ", ""), /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, `T3 Code (${stage})`);
-      }),
-      { calls, environment },
-    );
-  });
+          const runtimeName = calls.setName[0];
+          assert.isDefined(runtimeName);
+          assert.equal(runtimeName, `SparkCode ${stage}`);
+          assert.match(runtimeName.replaceAll(" ", ""), /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/);
+          assert.equal(calls.setAboutPanelOptions[0]?.applicationName, expectedDisplayName);
+        }),
+        { calls, environment },
+      );
+    },
+  );
 });

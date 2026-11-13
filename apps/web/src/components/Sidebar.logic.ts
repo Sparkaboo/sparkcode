@@ -689,15 +689,19 @@ type ThreadStatusInput = Pick<
 };
 
 // Read at event time: subscribing Sidebar to terminal or modifier state re-renders every row.
-export function threadShortcutContext(routeThreadRef: ScopedThreadRef | null) {
+export function threadShortcutContext(
+  routeThreadRef: ScopedThreadRef | null,
+  routeGroupTerminalRef: ScopedThreadRef | null = null,
+) {
+  const { terminalUiStateByThreadKey } = useTerminalUiStateStore.getState();
   return {
     terminalFocus: isTerminalFocused(),
     terminalOpen:
-      routeThreadRef !== null &&
-      selectThreadTerminalUiState(
-        useTerminalUiStateStore.getState().terminalUiStateByThreadKey,
-        routeThreadRef,
-      ).terminalOpen,
+      (routeThreadRef !== null &&
+        selectThreadTerminalUiState(terminalUiStateByThreadKey, routeThreadRef).terminalOpen) ||
+      (routeGroupTerminalRef !== null &&
+        selectThreadTerminalUiState(terminalUiStateByThreadKey, routeGroupTerminalRef)
+          .terminalOpen),
     previewFocus: isPreviewFocused(),
     previewOpen:
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, routeThreadRef) ===
@@ -774,6 +778,7 @@ function subscribeToThreadJumpHintInputs(listener: () => void): () => void {
 export function useThreadJumpHintsVisible(
   keybindings: ResolvedKeybindingsConfig,
   routeThreadRef: ScopedThreadRef | null,
+  routeGroupTerminalRef: ScopedThreadRef | null = null,
 ): boolean {
   return React.useSyncExternalStore(
     subscribeToThreadJumpHintInputs,
@@ -781,7 +786,7 @@ export function useThreadJumpHintsVisible(
       threadJumpModifierHold.getSnapshot() &&
       shouldShowThreadJumpHintsForModifiers(shortcutModifierStore.getSnapshot(), keybindings, {
         platform: navigator.platform,
-        context: threadShortcutContext(routeThreadRef),
+        context: threadShortcutContext(routeThreadRef, routeGroupTerminalRef),
       }),
   );
 }

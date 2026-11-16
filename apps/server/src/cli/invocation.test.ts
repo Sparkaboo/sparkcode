@@ -101,6 +101,19 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         'sudo env "PATH=$PATH" t3 browser setup',
       );
 
+      const sparkShim = path.join(home, ".sparkcode", "bin", "sparkcode");
+      yield* fs.makeDirectory(path.dirname(sparkShim), { recursive: true });
+      yield* fs.writeFileString(sparkShim, "#!/bin/sh\n", { mode: 0o755 });
+      const sparkLinked = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(sparkShim, path.join(sparkLinked, "sparkcode"));
+      expect(
+        yield* rootCommand({
+          ...desktop,
+          env: { T3CODE_CLI_PATH: sparkShim },
+          path: sparkLinked,
+        }),
+      ).toBe('sudo env "PATH=$PATH" sparkcode browser setup');
+
       expect(
         yield* rootCommand({
           node: "/opt/t3/t3",

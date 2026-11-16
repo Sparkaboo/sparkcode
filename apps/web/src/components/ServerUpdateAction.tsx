@@ -201,7 +201,7 @@ export function ServerUpdatesAction({
       if (desktopTargets.length > 0) {
         const confirmed =
           (await requestConfirmDialog(
-            `Update the T3 Code desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}? They will close and relaunch on those machines.`,
+            `Update the SparkCode desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}? They will close and relaunch on those machines.`,
             { initialFocus: "confirm" },
           )) ?? true;
         if (!confirmed) return;
@@ -285,8 +285,8 @@ export function ServerUpdateAction({
         type: "success",
         title: updatesInstall ? "Update command copied" : "Relaunch command copied",
         description: updatesInstall
-          ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
-          : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
+          ? `Run \`${command}\` on ${serverLabel}, then restart sparkcode with your usual options.`
+          : `Stop sparkcode on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed sparkcode command.`,
       });
     },
     onError: (error) => {
@@ -308,7 +308,7 @@ export function ServerUpdateAction({
     if (isDesktopAppUpdate) {
       const confirmed =
         (await requestConfirmDialog(
-          `Update the T3 Code desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
+          `Update the SparkCode desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
           { initialFocus: "confirm" },
         )) ?? true;
       if (!confirmed) {

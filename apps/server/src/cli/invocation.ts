@@ -118,22 +118,31 @@ function suggestedPackageSpec(version: string): string {
   return channel === undefined ? "t3" : `t3@${channel}`;
 }
 
+function shimCommandName(shimPath: string | undefined): "sparkcode" | "t3" {
+  const base = shimPath?.trim().replaceAll("\\", "/").split("/").pop() ?? "";
+  return /^sparkcode(?:\.cmd|\.exe)?$/i.test(base) ? "sparkcode" : "t3";
+}
+
 function formatCliCommand(input: {
   readonly subcommand: string;
   readonly entryPath: string;
   readonly version: string;
+  readonly shimPath?: string | undefined;
 }): string {
   const runner = detectCliRunner(input.entryPath);
   if (runner === null) {
-    return `t3 ${input.subcommand}`;
+    return `${shimCommandName(input.shimPath)} ${input.subcommand}`;
   }
   return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
 }
 
-export const resolveCliCommand = (subcommand: string) =>
-  Effect.map(resolveEntryPath, (entryPath) =>
-    formatCliCommand({ subcommand, entryPath, version: packageJson.version }),
-  );
+export const resolveCliCommand = Effect.fn("invocation.resolveCliCommand")(function* (
+  subcommand: string,
+) {
+  const entryPath = yield* resolveEntryPath;
+  const shimPath = (yield* HostProcess.Environment).T3CODE_CLI_PATH;
+  return formatCliCommand({ subcommand, entryPath, version: packageJson.version, shimPath });
+});
 
 const shellWord = (value: string) =>
   /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -171,11 +180,13 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
   const platform = yield* HostProcess.Platform;
   const withArgs = (prefix: string) =>
     [prefix, ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
+  const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
+  const cliName = shimCommandName(shim);
   const command = yield* resolveCliCommand(subcommand);
-  if (command !== `t3 ${subcommand}`) return { command: withArgs(command), launcher: false };
-  const onPath = yield* resolveCommandPath("t3");
+  if (command !== `${cliName} ${subcommand}`)
+    return { command: withArgs(command), launcher: false };
+  const onPath = yield* resolveCommandPath(cliName);
   if (onPath !== null) {
-    const shim = (yield* HostProcess.Environment).T3CODE_CLI_PATH?.trim();
     const fs = yield* FileSystem.FileSystem;
     const real = (file: string) => fs.realPath(file).pipe(Effect.orElseSucceed(() => null));
     // Windows `t3.cmd` shims are text files that never realpath to the executable they run.

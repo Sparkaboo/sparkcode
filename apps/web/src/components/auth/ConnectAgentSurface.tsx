@@ -316,8 +316,8 @@ export function McpConsent({
               value={pairingCode}
             />
             <p className="text-xs text-muted-foreground">
-              Get one from Use T3 Code in another app (MCP), Settings → Sharing & access, or{" "}
-              <code>t3 auth pairing create</code> on this machine.
+              Get one from Use SparkCode in another app (MCP), Settings → Sharing & access, or{" "}
+              <code>sparkcode auth pairing create</code> on this machine.
             </p>
           </div>
         ) : null}

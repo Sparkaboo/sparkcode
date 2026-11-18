@@ -66,6 +66,16 @@
 
 ---
 
+## 下载 SparkCode
+
+桌面安装包及独立 CLI 见 [SparkCode Releases](https://github.com/Sparkaboo/sparkcode/releases/latest)。macOS 提供 Apple Silicon 和 Intel 版本，Windows 与 Linux 提供 x64 和 arm64 版本。从本地打包的 0.1.9 首次升级时，请手动下载安装包。
+
+macOS Apple Silicon 和 Linux 可以用以下命令安装 CLI。Windows 在 PowerShell 中使用版本页面提供的 `install.ps1`。安装完成后运行 `sparkcode --version`。
+
+```sh
+curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh
+```
+
 ## 本地开发与打包
 
 ### 环境准备与启动

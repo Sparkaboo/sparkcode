@@ -2,7 +2,15 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+## SparkCode stable releases
+
+Prepare the four release package manifests with `node scripts/update-release-package-versions.ts X.Y.Z`. Write the user-facing notes in `docs/releases/vX.Y.Z.md`, including the upstream base and any backported changes. Commit these files on `main` and dispatch the **Release** workflow on that commit with `channel=stable` and `version=X.Y.Z`. A plain `vX.Y.Z` tag on the release commit also triggers the build.
+
+GitHub-hosted jobs build and smoke-test the six desktop targets and five CLI archives. The publish job attaches the binaries, updater manifests, installer scripts, CLI checksums and database migration metadata to the SparkCode GitHub Release. An Intel Mac gets the desktop application. Installers use `sparkcode` on PATH and download from this fork. Apple and Windows signing use the optional secrets in the desktop workflow.
+
+## Upstream T3 Code operations
+
+The following instructions describe the upstream repository's release channels and hosted services.
 
 Beta is the product label, not a release channel or version suffix. Release channels
 remain stable and nightly. To ship 0.1.0 Beta, use `channel=stable` and

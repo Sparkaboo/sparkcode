@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { NativeQuotaRequested, type readNativeAntigravityQuota } from "./antigravityNativeQuota.ts";
 
 import {
   makeUnavailableUsageLimits,
@@ -434,6 +435,9 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   readonly gcpProject?: string | undefined;
   readonly resolveRuntime?: Effect.Effect<AntigravityUsageRuntimeInfo | undefined> | undefined;
   readonly readKeyring?: ((service: string) => Effect.Effect<string | undefined>) | undefined;
+  readonly readNativeQuota?: Effect.Effect<
+    Effect.Success<ReturnType<typeof readNativeAntigravityQuota>>
+  >;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -509,6 +513,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const loadToken = Effect.fn("AntigravityUsageProbe.loadToken")(function* (
     authMethod: "oauth-personal" | "oauth-business",
     usesLegacyTokenFile: boolean,
+    consultSharedKeyring: boolean,
   ) {
     const cliFileStored: Array<typeof CliStoredToken.Type> = [];
     for (const filename of CLI_TOKEN_FILENAMES[authMethod]) {
@@ -528,15 +533,8 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       const fromCliFile = resolveCliCredentials(stored, authMethod, fallbackProjectId);
       if (fromCliFile) return fromCliFile;
     }
-    const persistedMethod = (yield* fs.exists(authStatePath))
-      ? yield* fs.readFileString(authStatePath).pipe(
-          Effect.flatMap(decodeAcpAuthState),
-          Effect.map((state) => state.methodId?.trim()),
-          Effect.orElseSucceed(() => undefined),
-        )
-      : undefined;
     // Only consult the shared OS keyring when this ACP profile recorded a matching sign-in.
-    if (persistedMethod === authMethod || persistedMethod === "terminal-login") {
+    if (consultSharedKeyring) {
       for (const service of KEYRING_SERVICES[authMethod]) {
         const keyringRaw = yield* readKeyring(service);
         const decodedKeyring = keyringRaw ? decodeAntigravityKeyringSecret(keyringRaw) : undefined;
@@ -625,13 +623,48 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     }
     const authMethod = input.authMethod;
     const runtime = yield* resolveRuntime;
-    const token = yield* loadToken(authMethod, runtime?.usesLegacyTokenFile ?? false);
+    const persistedMethod = yield* fs.readFileString(authStatePath).pipe(
+      Effect.flatMap(decodeAcpAuthState),
+      Effect.map((state) => state.methodId?.trim()),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const hasProfileSignIn = persistedMethod === authMethod || persistedMethod === "terminal-login";
+    const nativeQuota =
+      runtime?.usesLegacyTokenFile === false && authMethod === "oauth-personal"
+        ? input.readNativeQuota
+        : undefined;
+    const token = yield* loadToken(
+      authMethod,
+      runtime?.usesLegacyTokenFile ?? false,
+      hasProfileSignIn && nativeQuota === undefined,
+    );
     if (!token) {
       cached = undefined;
+      if (hasProfileSignIn) {
+        if (nativeQuota && (yield* NativeQuotaRequested)) {
+          const requestedAt = yield* Clock.currentTimeMillis;
+          const report = yield* nativeQuota;
+          if (report) {
+            const windows = summaryWindows(report, requestedAt);
+            if (windows.length > 0)
+              return {
+                ...makeUsageLimits({ checkedAt, windows }),
+                credentialFingerprint: yield* sha256(`google-email\0${report.account}`),
+              };
+          }
+        }
+        return makeUnavailableUsageLimits({
+          checkedAt,
+          reason: "probeFailed",
+          message:
+            "Could not read limits for this Antigravity account. Refresh provider status to retry.",
+        });
+      }
       return makeUnavailableUsageLimits({
         checkedAt,
         reason: "unsupported",
-        message: "Sign in with Google to see Antigravity limits.",
+        message:
+          "Antigravity limits are unavailable for this profile. Check the account in provider settings.",
       });
     }
     const configuredProject =

@@ -38,6 +38,7 @@ import {
 import { resolveUsageLimitsAfterProbe } from "@t3tools/provider-core/server/usageLimits";
 
 import { antigravityThinkingConfig } from "./acp/AntigravityAcpSupport.ts";
+import { NativeQuotaRequested } from "./antigravityNativeQuota.ts";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
@@ -234,8 +235,14 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const usageRead = yield* FiberHandle.make();
   const republish = yield* Deferred.make<Effect.Effect<ServerProvider>>();
   const scope = yield* Effect.scope;
+  let activeReadIsRequested = false;
   const refreshUsage = Effect.fn("AntigravityProvider.refreshUsage")(function* () {
     if (!options.probeUsage || (yield* PublishingUsage)) return;
+    const requested = yield* NativeQuotaRequested;
+    // An explicit refresh can upgrade a lightweight background check already in flight.
+    if (Option.isSome(yield* FiberHandle.get(usageRead)) && (!requested || activeReadIsRequested))
+      return;
+    activeReadIsRequested = requested;
     yield* FiberHandle.run(
       usageRead,
       options.probeUsage.pipe(
@@ -262,7 +269,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         ),
       ),
       // Store the fiber before it runs, so a sign-out during the read can interrupt it.
-      { onlyIfMissing: true, startImmediately: false },
+      { startImmediately: false },
     );
   });
   const resetUsage = Effect.gen(function* () {
@@ -522,7 +529,11 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   });
 
   return {
-    snapshot: { ...managed, getSnapshot },
+    snapshot: {
+      ...managed,
+      getSnapshot,
+      refresh: managed.refresh.pipe(Effect.provideService(NativeQuotaRequested, true)),
+    },
     onSessionStarted,
     onConfigOptionsUpdated,
     onAvailableCommands,

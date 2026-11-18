@@ -39,7 +39,11 @@ See the [adapter](../../packages/provider-pi/src/server/adapter.ts).
 Antigravity separates account profiles per instance while sharing installed executables across the
 environment. The 1.4.5 bundle forces file-based credential storage (`acp_token.json`); the native
 `agy` CLI records each profile's active sign-in under `cache/acp-auth-state.json` and stores tokens
-in profile `*-oauth-token` files or the OS keyring when file storage is inactive. The launch environment removes ambient Google credentials,
+in profile `*-oauth-token` files or the OS keyring when file storage is inactive. For a personal
+sign-in without a profile token, an explicit status refresh reads the CLI's zero-turn `--print /usage`
+report. Print mode selects its own account, so its authenticated identity must match the ACP
+profile before publishing limits. Periodic health checks never launch the CLI for this report.
+The launch environment removes ambient Google credentials,
 so an instance cannot silently use another account or billing project. The agent also resolves
 its user-global skill directories under that profile, so the profile links those two directories
 back to the user's real `~/.gemini`; MCP servers, hooks, and rules there stay out of the profile.

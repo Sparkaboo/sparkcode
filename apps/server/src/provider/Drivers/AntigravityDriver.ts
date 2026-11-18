@@ -63,6 +63,7 @@ import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeL
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
 import { makeAntigravityUsageProbe } from "../antigravityUsageLimits.ts";
+import { readNativeAntigravityQuota } from "../antigravityNativeQuota.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -435,6 +436,23 @@ export const AntigravityDriver: ProviderDriver<
           executablePath: executable.executablePath,
           usesLegacyTokenFile: executable.harnessPath !== null,
         })),
+        Effect.orElseSucceed(() => undefined),
+      ),
+      readNativeQuota: installation.acquire(settings.binaryPath, processEnvironment).pipe(
+        Effect.flatMap((runtime) =>
+          runtime.harnessPath === null
+            ? readNativeAntigravityQuota({
+                profileDirectory,
+                executablePath: runtime.executablePath,
+                version: runtime.version,
+                environment: processEnvironment,
+              })
+            : Effect.undefined,
+        ),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.scoped,
         Effect.orElseSucceed(() => undefined),
       ),
     }).pipe(

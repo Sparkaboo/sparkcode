@@ -193,17 +193,22 @@ function quoteBrowserArgument(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+export function cleanAntigravityEnvironment(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(baseEnv)) {
+    // Windows treats environment keys as case-insensitive. Remove aliases too.
+    if (!removedEnvironmentKeys.has(key.toUpperCase())) environment[key] = value;
+  }
+  return environment;
+}
+
 function antigravityEnvironment(
   profile: AntigravityProfile,
   baseEnv: NodeJS.ProcessEnv,
   auth: AntigravityAuthConfig,
   runtimeTempDirectory?: string,
 ) {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(baseEnv)) {
-    // Windows treats environment keys as case-insensitive. Remove aliases too.
-    if (!removedEnvironmentKeys.has(key.toUpperCase())) environment[key] = value;
-  }
+  const environment = cleanAntigravityEnvironment(baseEnv);
   // Put the GCP pair in settings.json because GOOGLE_API_KEY takes precedence in the environment.
   const credential =
     auth.authMethod === "gemini-api-key" && auth.apiKey

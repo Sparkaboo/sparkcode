@@ -156,9 +156,10 @@ T3 does not support Antigravity goal status, pause, resume, or clear commands.
 
 ## Check access and troubleshoot
 
-Open **Usage > Limits** to see the remaining Gemini and shared Claude/GPT allowances
-for Google sign-ins. Each group has separate five-hour and weekly limits and reset
-times. Limits refresh with provider status and include usage outside T3 Code.
+Open **Usage > Limits** or the sidebar **Usage** menu to see the remaining allowances
+for your Google account. Models in the same group share its five-hour and weekly
+limits. Use **Refresh** to get the current percentages and reset times, including
+usage outside T3 Code.
 
 A server restart keeps your Google sign-in. The provider shows the saved account
 until a session, a refresh, or a sign-out reports something new.

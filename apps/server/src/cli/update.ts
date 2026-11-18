@@ -207,15 +207,17 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
   ].filter((entry) => entry.trim().length > 0);
   for (const directory of candidates) {
-    const shimPath = path.join(directory, "sparkcode.cmd");
-    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isNone(contents)) continue;
-    const target = windowsShimTarget(contents.value);
-    if (
-      target !== undefined &&
-      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-    ) {
-      return shimPath;
+    for (const name of ["sparkcode.cmd", "t3.cmd"]) {
+      const shimPath = path.join(directory, name);
+      const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+      if (Option.isNone(contents)) continue;
+      const target = windowsShimTarget(contents.value);
+      if (
+        target !== undefined &&
+        path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
+      ) {
+        return shimPath;
+      }
     }
   }
   return undefined;

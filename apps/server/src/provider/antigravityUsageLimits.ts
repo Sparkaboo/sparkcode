@@ -22,6 +22,10 @@ export function antigravityUserAgent(platform: NodeJS.Platform, architecture: No
   return `antigravity/hub/2.24.0 (aidev_client; os_type=${platform}; arch=${architecture}; cl=963137146)`;
 }
 
+declare const __SPARKCODE_STANDALONE__: boolean | undefined;
+// Standalone servers use the selected provider profile or its native quota command.
+const standalone = typeof __SPARKCODE_STANDALONE__ !== "undefined" && __SPARKCODE_STANDALONE__;
+
 const DAILY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 const PROD_ENDPOINT = "https://cloudcode-pa.googleapis.com";
 // The ACP runtime meters consumer tiers on the daily host and GCP-terms tiers on prod.
@@ -242,6 +246,7 @@ const readSystemKeyringSecret = Effect.fn("AntigravityUsageProbe.readSystemKeyri
     spawner: Option.Option<ChildProcessSpawner.ChildProcessSpawner["Service"]>,
     service: string,
   ) {
+    if (standalone) return undefined;
     if (platform === "darwin") {
       // `zalando/go-keyring` creates the macOS item via `/usr/bin/security`, which owns its ACL;
       // reading through `/usr/bin/security` avoids triggering a per-app Keychain modal prompt.
@@ -480,7 +485,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     executablePath: string | undefined,
     authMethod: "oauth-personal" | "oauth-business",
   ) {
-    if (!executablePath || !(yield* fs.exists(executablePath))) return [];
+    if (standalone || !executablePath || !(yield* fs.exists(executablePath))) return [];
     const info = yield* fs.stat(executablePath).pipe(Effect.orElseSucceed(() => undefined));
     if (!info || info.type !== "File" || info.size > MAX_CLI_BINARY_BYTES) return [];
     const mtimeKey = Option.isSome(info.mtime) ? String(info.mtime.value.getTime()) : "";
@@ -633,11 +638,14 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       runtime?.usesLegacyTokenFile === false && authMethod === "oauth-personal"
         ? input.readNativeQuota
         : undefined;
-    const token = yield* loadToken(
-      authMethod,
-      runtime?.usesLegacyTokenFile ?? false,
-      hasProfileSignIn && nativeQuota === undefined,
-    );
+    const token =
+      standalone && hasProfileSignIn && nativeQuota
+        ? undefined
+        : yield* loadToken(
+            authMethod,
+            runtime?.usesLegacyTokenFile ?? false,
+            hasProfileSignIn && nativeQuota === undefined,
+          );
     if (!token) {
       cached = undefined;
       if (hasProfileSignIn) {

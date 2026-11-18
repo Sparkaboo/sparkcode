@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   AntigravitySettings,
+  DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
@@ -13,9 +14,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -115,7 +118,7 @@ const expectedCommands = [
 const layerTest = ProviderHostLive.layer.pipe(
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-      shouldRunScopeWork: () => Effect.succeed(false),
+      shouldRunScopeWork: (scope) => Effect.succeed(scope.type === "provider-status"),
     }),
   ),
   Layer.provideMerge(ServerSettings.layerTest()),
@@ -169,10 +172,13 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     Effect.andThen(initialUpdate),
     Effect.asVoid,
   );
-  // Subscribe before the trigger; yield the returned pull to await the publish.
   const nextPublish = (predicate: (snapshot: ServerProvider) => boolean) =>
-    Stream.toPull(provider.snapshot.streamChanges.pipe(Stream.filter(predicate))).pipe(
-      Effect.map((pull) => pull.pipe(Effect.map((snapshots) => snapshots[0]))),
+    provider.snapshot.streamChanges.pipe(
+      Stream.filter(predicate),
+      Stream.runHead,
+      Effect.map(Option.getOrUndefined),
+      Effect.forkChild({ startImmediately: true }),
+      Effect.map(Fiber.join),
     );
   return {
     provider,
@@ -693,7 +699,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
   );
 
   it.effect(
-    "publishes limits, retains a successful read on failure, and clears them on sign-out",
+    "publishes periodic quota changes, retains them on failure, and clears them on sign-out",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -713,6 +719,16 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           const published = yield* harness.nextPublish((snapshot) => !!snapshot.usageLimits);
           yield* harness.initialize;
           expect((yield* published)?.usageLimits).toEqual(limits);
+          const updated = {
+            checkedAt: "2026-10-09T12:05:00.000Z",
+            windows: limits.windows.map((window) => ({ ...window, usedPercent: 82 })),
+          };
+          yield* Ref.set(usage, updated);
+          const periodic = yield* harness.nextPublish(
+            (snapshot) => snapshot.usageLimits?.checkedAt === updated.checkedAt,
+          );
+          yield* TestClock.adjust(DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL);
+          expect((yield* periodic)?.usageLimits).toEqual(updated);
           // The second health check is the one the failed background read triggers.
           const checks = yield* Ref.make(0);
           const failedReadApplied = yield* Deferred.make<void>();
@@ -726,17 +742,17 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
             ),
           );
           yield* Ref.set(usage, {
-            checkedAt: "2026-10-09T12:01:00.000Z",
+            checkedAt: "2026-10-09T12:06:00.000Z",
             windows: [],
             unavailable: { reason: "probeFailed" },
           });
           yield* harness.provider.snapshot.refresh;
           yield* Deferred.await(failedReadApplied);
-          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
+          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(updated);
           yield* harness.provider.onSignedOut;
           expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
           yield* Ref.set(usage, {
-            checkedAt: "2026-10-09T12:02:00.000Z",
+            checkedAt: "2026-10-09T12:07:00.000Z",
             windows: [],
             unavailable: { reason: "unsupported" },
           });
@@ -794,6 +810,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         const published = yield* harness.nextPublish((snapshot) => !!snapshot.usageLimits);
         yield* harness.initialize;
         yield* Deferred.await(readStarted);
+        yield* harness.provider.snapshot.refresh;
         yield* harness.provider.onSessionStarted(started, "/workspace");
         yield* harness.provider.onSessionStarted(started, "/other");
         const ready = yield* harness.provider.snapshot.getSnapshot;

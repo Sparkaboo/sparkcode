@@ -20,7 +20,7 @@ import {
   extractAntigravityOAuthClientPairs,
   makeAntigravityUsageProbe,
 } from "./antigravityUsageLimits.ts";
-import { NativeQuotaRequested, readNativeAntigravityQuota } from "./antigravityNativeQuota.ts";
+import { readNativeAntigravityQuota } from "./antigravityNativeQuota.ts";
 
 const summary = {
   groups: [
@@ -754,7 +754,7 @@ describe("Antigravity subscription limits", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
-  it.effect("publishes the signed-in ACP account's zero-turn print quotas only on refresh", () =>
+  it.effect("refreshes signed-in ACP quotas on successive zero-turn native reads", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -762,6 +762,7 @@ describe("Antigravity subscription limits", () => {
       let version = "1.5.10";
       let turns = 0;
       let calls = 0;
+      let remaining = 0.89;
       const login = (account: string) =>
         `I1118 11:55:37.000123 53 server_oauth.go:226] OAuth: authenticated successfully as ${account}\n`;
       const spawner = ChildProcessSpawner.make(
@@ -788,7 +789,7 @@ describe("Antigravity subscription limits", () => {
                     {
                       name: "Gemini Models",
                       buckets: [
-                        { id: "gemini-5h", window: "5h", remaining_fraction: 0.89 },
+                        { id: "gemini-5h", window: "5h", remaining_fraction: remaining },
                         {
                           id: "gemini-weekly",
                           window: "weekly",
@@ -836,10 +837,7 @@ describe("Antigravity subscription limits", () => {
         path.join(logDir, "acp-server-20261118_115536-123.log"),
         login(email),
       );
-      const refresh = native.probe.pipe(Effect.provideService(NativeQuotaRequested, true));
-      expect((yield* native.probe).unavailable?.reason).toBe("probeFailed");
-      expect(calls).toBe(0);
-      const limits = yield* refresh;
+      const limits = yield* native.probe;
       expect(limits.windows.map((w) => [w.id, Math.round(w.usedPercent)])).toEqual([
         ["gemini-5h", 11],
         ["gemini-weekly", 100],
@@ -847,14 +845,20 @@ describe("Antigravity subscription limits", () => {
       expect(limits.windows[1]?.resetsAt).toBe("2026-11-25T01:32:25.000Z");
       expect(limits.credentialFingerprint).toMatch(/^[0-9a-f]{64}$/);
       expect(JSON.stringify(limits)).not.toContain(email);
+      remaining = 0.42;
+      const updated = yield* native.probe;
+      expect(updated.windows.find((window) => window.id === "gemini-5h")?.usedPercent).toBeCloseTo(
+        58,
+      );
+      expect(updated.credentialFingerprint).toBe(limits.credentialFingerprint);
       turns = 1;
-      expect((yield* refresh).unavailable?.reason).toBe("probeFailed");
+      expect((yield* native.probe).unavailable?.reason).toBe("probeFailed");
       turns = 0;
       email = "other@example.com";
-      expect((yield* refresh).windows).toEqual([]);
+      expect((yield* native.probe).windows).toEqual([]);
       version = "1.1.10";
-      yield* refresh;
-      expect(calls).toBe(3);
+      yield* native.probe;
+      expect(calls).toBe(4);
       expect(native.requests).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );

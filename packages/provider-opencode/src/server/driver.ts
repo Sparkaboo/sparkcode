@@ -643,8 +643,7 @@ export const OpenCodeDriver: ProviderDriver<
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       checkProviderOnSettingsChange: () => false,
-      // A failed or still-loading catalog must recover without a manual
-      // refresh. Healthy instances need no recurring server starts.
+      // Only incomplete catalogs need full discovery. Ready instances poll just the quota endpoint.
       refreshOnInterval: (snapshot) =>
         snapshot.enabled &&
         snapshot.installed &&

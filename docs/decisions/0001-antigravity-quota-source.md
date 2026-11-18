@@ -15,7 +15,7 @@ A personal Google account can authenticate in ACP while its profile has no token
 
 ## Decision
 
-When the profile has a saved sign-in and no readable profile token, an explicit refresh can run `agy --print /usage --output-format json`. Require a CLI version that supports this read-only command, a successful zero-turn response, and matching authenticated accounts in the two startup logs. Periodic health checks keep the last successful reading.
+When a personal profile has a saved sign-in and no readable profile token, both periodic health checks and manual refresh can run `agy --print /usage --output-format json`. They share one in-flight read per provider instance. Require a CLI version that supports this read-only command, a successful zero-turn response, and matching authenticated accounts in the two startup logs. A transient failure preserves the last successful reading.
 
 ## Alternatives considered
 

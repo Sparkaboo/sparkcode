@@ -837,7 +837,24 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     (scenario) =>
       Effect.gen(function* () {
         const requested: string[] = [];
-        const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret", requested);
+        let workspaceUsage = scenario.data;
+        const readyResponses = {
+          ...OPENCODE_2_RESPONSES,
+          "/api/model": {
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              location: { directory: "/work" },
+              data: [openCode2Model("opencode", "big-pickle", "Big Pickle")],
+            }),
+          },
+          "/api/provider": {
+            status: 200,
+            contentType: "application/json",
+            body: '{"location":{"directory":"/work"},"data":[]}',
+          },
+        };
+        const replay = replayOpenCodeServer(readyResponses, "secret", requested);
         const server = HttpClient.make((request) => {
           assert.notInclude(request.url, "opencode.ai/zen");
           if (request.url.endsWith("/api/experimental/usage/limits")) {
@@ -848,7 +865,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
                 Response.json(
                   {
                     location: { directory: "/work" },
-                    data: scenario.data,
+                    data: workspaceUsage,
                   },
                   { status: scenario.status },
                 ),
@@ -861,22 +878,35 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
           { serverUrl: "https://remote.example", serverPassword: "secret" },
           server,
         );
-        const [snapshot] = Array.from(
-          yield* instance.snapshot.streamChanges.pipe(
-            Stream.filter((snapshot) => snapshot.usageLimits !== undefined),
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+        const first = yield* instance.snapshot.streamChanges.pipe(
+          Stream.filter((snapshot) => snapshot.usageLimits !== undefined),
+          Stream.runHead,
+          Effect.forkChild({ startImmediately: true }),
         );
+        yield* TestClock.adjust("5 seconds");
+        const snapshot = Option.getOrThrow(yield* Fiber.join(first));
         assert.strictEqual(snapshot?.usageLimits?.unavailable?.reason, scenario.reason);
-        if (scenario.reason === undefined) {
+        if (workspaceUsage) {
+          assert.strictEqual(snapshot?.status, "ready");
           assert.strictEqual(snapshot?.usageLimits?.windows[0]?.usedPercent, 75);
           assert.strictEqual(snapshot?.usageLimits?.externalUsage?.label, "Remote workspace");
           assert.deepStrictEqual(snapshot?.usageLimits?.windows[0]?.providerIds, []);
+          workspaceUsage = {
+            ...workspaceUsage,
+            budgets: workspaceUsage.budgets.map((budget) => ({ ...budget, spent: 18 })),
+          };
+          const catalogReads = requested.filter((path) => path === "/api/model").length;
+          yield* TestClock.adjust("5 minutes");
+          const updated = yield* instance.snapshot.getSnapshot;
+          assert.strictEqual(updated.usageLimits?.windows[0]?.usedPercent, 90);
+          assert.lengthOf(
+            requested.filter((path) => path === "/api/model"),
+            catalogReads,
+          );
         } else {
           assert.deepStrictEqual(snapshot?.usageLimits?.windows, []);
         }
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
   it.effect.each(
@@ -893,7 +923,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       unsupported: false,
       ...scenario,
     })),
-  )("Go usage recovery $name without restarting a ready catalog", (scenario) =>
+  )("Go quota polling $name without restarting a ready catalog", (scenario) =>
     Effect.gen(function* () {
       const usageStarted = yield* Deferred.make<void>();
       let usageReads = 0;
@@ -909,7 +939,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
             );
           if (usageReads === 1)
             return Deferred.succeed(usageStarted, undefined).pipe(Effect.andThen(Effect.never));
-          const window = { percent: 10, resetsAt: "2026-11-01T00:00:00.000Z" };
+          const window = { percent: usageReads * 10, resetsAt: "2026-11-01T00:00:00.000Z" };
           return Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
@@ -1047,8 +1077,10 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       );
       assert.strictEqual(modelReads, catalogReads);
       assert.strictEqual(serverStarts, starts);
-      yield* TestClock.adjust("15 minutes");
-      assert.strictEqual(usageReads, expectedReads);
+      yield* TestClock.adjust("5 minutes");
+      const next = yield* instance.snapshot.getSnapshot;
+      assert.strictEqual(usageReads, shouldRecover ? expectedReads + 1 : expectedReads);
+      assert.strictEqual(next.usageLimits?.windows[0]?.usedPercent, shouldRecover ? 30 : undefined);
       assert.strictEqual(modelReads, catalogReads);
       assert.strictEqual(serverStarts, starts);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),

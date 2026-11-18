@@ -373,6 +373,10 @@ describe("makeManagedServerProvider", () => {
       Effect.gen(function* () {
         const checkCalls = yield* Ref.make(0);
         const initialCheckDone = yield* Deferred.make<void>();
+        const usageLimits = {
+          checkedAt: refreshedSnapshot.checkedAt,
+          windows: [{ id: "weekly", kind: "weekly", label: "Weekly", usedPercent: 20 }],
+        } as const;
         const failedSnapshot: ServerProvider = {
           ...refreshedSnapshot,
           status: "error",
@@ -391,8 +395,11 @@ describe("makeManagedServerProvider", () => {
                 ? Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)
                 : Effect.void,
             ),
-            Effect.map((count) => (count === 2 ? failedSnapshot : refreshedSnapshot)),
+            Effect.map((count) =>
+              count === 2 ? failedSnapshot : { ...refreshedSnapshot, usageLimits },
+            ),
           ),
+          checkUsageLimits: Effect.succeed(usageLimits),
           refreshInterval: "5 minutes",
         });
         yield* Deferred.await(initialCheckDone);
@@ -406,6 +413,7 @@ describe("makeManagedServerProvider", () => {
         yield* TestClock.adjust("5 minutes");
         yield* TestClock.adjust("1 minute");
 
+        assert.strictEqual(yield* Ref.get(checkCalls), 3);
         assert.strictEqual((yield* provider.getSnapshot).status, "ready");
         assert.deepStrictEqual(
           (yield* Ref.get(published)).filter((snapshot) => snapshot.status === "error"),

@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { NativeQuotaRequested, type readNativeAntigravityQuota } from "./antigravityNativeQuota.ts";
+import type { readNativeAntigravityQuota } from "./antigravityNativeQuota.ts";
 
 import {
   makeUnavailableUsageLimits,
@@ -649,7 +649,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     if (!token) {
       cached = undefined;
       if (hasProfileSignIn) {
-        if (nativeQuota && (yield* NativeQuotaRequested)) {
+        if (nativeQuota) {
           const requestedAt = yield* Clock.currentTimeMillis;
           const report = yield* nativeQuota;
           if (report) {

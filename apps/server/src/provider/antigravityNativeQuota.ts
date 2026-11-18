@@ -1,6 +1,5 @@
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import { satisfiesSemverRange } from "@t3tools/shared/semver";
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -9,13 +8,6 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { cleanAntigravityEnvironment } from "./antigravityAuthSupport.ts";
-
-export const NativeQuotaRequested = Context.Reference<boolean>(
-  "t3/antigravity/NativeQuotaRequested",
-  {
-    defaultValue: () => false,
-  },
-);
 
 const decodeReport = Schema.decodeEffect(
   Schema.fromJsonString(

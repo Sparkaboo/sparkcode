@@ -323,23 +323,26 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     );
   });
 
-  const needsUsageRecovery = (snapshot: ServerProvider) =>
+  const needsProviderRefresh = (snapshot: ServerProvider) =>
+    input.refreshOnInterval !== false &&
+    (typeof input.refreshOnInterval !== "function" || input.refreshOnInterval(snapshot));
+
+  const needsUsageOnlyRefresh = (snapshot: ServerProvider) =>
     input.checkUsageLimits !== undefined &&
     snapshot.installed &&
     snapshot.status === "ready" &&
     snapshot.auth.status === "authenticated" &&
-    snapshot.usageLimits?.unavailable?.reason === "probeFailed";
-
-  const needsProviderRefresh = (snapshot: ServerProvider) =>
-    input.refreshOnInterval !== false &&
-    (typeof input.refreshOnInterval !== "function" || input.refreshOnInterval(snapshot));
+    snapshot.usageLimits !== undefined &&
+    (snapshot.usageLimits.unavailable
+      ? snapshot.usageLimits.unavailable.reason === "probeFailed"
+      : !needsProviderRefresh(snapshot));
 
   const refreshOnInterval = Effect.fn("ManagedServerProvider.refreshOnInterval")(function* (
     deferFailure: boolean,
   ) {
     const { snapshot } = yield* Ref.get(snapshotStateRef);
     if (!snapshot.enabled) return;
-    if (!needsUsageRecovery(snapshot) || !input.checkUsageLimits) {
+    if (!needsUsageOnlyRefresh(snapshot) || !input.checkUsageLimits) {
       if (needsProviderRefresh(snapshot)) {
         yield* applySnapshotBase(yield* input.getSettings, { forceRefresh: true, deferFailure });
       }
@@ -351,10 +354,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         published: state.snapshot.usageLimits,
         probed,
       });
+      if (usageLimits === state.snapshot.usageLimits) return [null, state] as const;
       const snapshot = withUsageLimits(state.snapshot, usageLimits);
       return [snapshot, { ...state, snapshot }] as const;
     });
-    yield* PubSub.publish(changesPubSub, next);
+    if (next !== null) yield* PubSub.publish(changesPubSub, next);
   });
 
   const shouldRefreshOnInterval = Effect.gen(function* () {
@@ -363,7 +367,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     // republish a snapshot that differs in checkedAt.
     if (
       !state.snapshot.enabled ||
-      (!needsUsageRecovery(state.snapshot) && !needsProviderRefresh(state.snapshot))
+      (!needsProviderRefresh(state.snapshot) && !needsUsageOnlyRefresh(state.snapshot))
     ) {
       return false;
     }

@@ -1,5 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Layer from "effect/Layer";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -7,10 +8,16 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
-import { makeAntigravityUsageProbe } from "./antigravityUsageLimits.ts";
+import {
+  type AntigravityUsageRuntimeInfo,
+  decodeAntigravityKeyringSecret,
+  extractAntigravityOAuthClientPairs,
+  makeAntigravityUsageProbe,
+} from "./antigravityUsageLimits.ts";
 
 const summary = {
   groups: [
@@ -66,13 +73,29 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     userInfoAt?: number;
     missingToken?: boolean;
     authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
+    gcpProject?: string;
+    resolveRuntime?: Effect.Effect<AntigravityUsageRuntimeInfo | undefined>;
+    loadCodeAssistByHost?: Record<string, unknown>;
+    loadCodeAssistStatusByHost?: Record<string, number>;
+    expectedProjectByHost?: Record<string, string | undefined>;
+    readKeyring?: (service: string) => Effect.Effect<string | undefined>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const profileDirectory = yield* fs.makeTempDirectoryScoped();
-  yield* fs.makeDirectory(path.join(profileDirectory, "antigravity-acp"));
-  const tokenPath = path.join(profileDirectory, "antigravity-acp", "acp_token.json");
+  const acpDirectory = path.join(profileDirectory, "antigravity-acp");
+  yield* fs.makeDirectory(acpDirectory);
+  const cliBinaryPath = path.join(profileDirectory, "fake-antigravity-cli");
+  const syntheticClientId = `${"1".repeat(12)}-${"a".repeat(32)}.apps.googleusercontent.com`;
+  const syntheticClientSecret = `${"GOCSPX"}-${"x".repeat(28)}`;
+  yield* fs.writeFileString(
+    cliBinaryPath,
+    `rodata:${syntheticClientId}\0${syntheticClientSecret}\n`,
+  );
+  const tokenPath = path.join(acpDirectory, "acp_token.json");
+  const cliTokenPath = path.join(acpDirectory, "jetski-oauth-token");
+  const authStatePath = path.join(acpDirectory, "cache", "acp-auth-state.json");
   const writeToken = (refreshToken: string) =>
     fs.writeFileString(
       tokenPath,
@@ -111,8 +134,24 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
             : Response.json({}, { status: 403 }),
         );
       }
-      expect(JSON.parse(body)).toEqual({ project: "project-id" });
       expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
+      if (request.url.endsWith(":loadCodeAssist")) {
+        expect(JSON.parse(body)).toEqual({ metadata: { ideType: "ANTIGRAVITY" } });
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(
+            options.loadCodeAssistByHost?.[url.host] ?? {
+              cloudaicompanionProject: "companion-project",
+            },
+            { status: options.loadCodeAssistStatusByHost?.[url.host] ?? 200 },
+          ),
+        );
+      }
+      const expectedProject =
+        options.expectedProjectByHost && url.host in options.expectedProjectByHost
+          ? options.expectedProjectByHost[url.host]
+          : "project-id";
+      expect(JSON.parse(body)).toEqual(expectedProject ? { project: expectedProject } : {});
       return HttpClientResponse.fromWeb(
         request,
         request.url.endsWith(":retrieveUserQuotaSummary")
@@ -132,8 +171,22 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
     authMethod: options.authMethod ?? "oauth-personal",
+    ...(options.gcpProject === undefined ? {} : { gcpProject: options.gcpProject }),
+    resolveRuntime:
+      options.resolveRuntime ??
+      Effect.succeed({ executablePath: cliBinaryPath, usesLegacyTokenFile: true }),
+    ...(options.readKeyring === undefined ? {} : { readKeyring: options.readKeyring }),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
-  return { ...usage, requests, writeToken, tokenPath };
+  return {
+    ...usage,
+    requests,
+    writeToken,
+    acpDirectory,
+    cliBinaryPath,
+    tokenPath,
+    cliTokenPath,
+    authStatePath,
+  };
 });
 
 describe("Antigravity subscription limits", () => {
@@ -662,5 +715,203 @@ describe("Antigravity subscription limits", () => {
         expect(requests).toEqual([]);
       }
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect(
+    "reads native agy CLI keyring and file tokens and resolves companion projects per host",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const keyringPayload = JSON.stringify({
+          token: { access_token: "stale", refresh_token: "cli-keyring-refresh" },
+          auth_method: "consumer",
+          id_token_email: "someone@example.com",
+        });
+        const encodedKeyring = `go-keyring-base64:${Buffer.from(keyringPayload).toString("base64")}`;
+        const keyringServicesQueried: string[] = [];
+        const loadCodeAssistStatusByHost: Record<string, number> = {
+          "daily-cloudcode-pa.googleapis.com": 503,
+        };
+        const expectedProjectByHost: Record<string, string | undefined> = {
+          "daily-cloudcode-pa.googleapis.com": undefined,
+          "cloudcode-pa.googleapis.com": "prod-project",
+        };
+        const cliBinDir = yield* fs.makeTempDirectoryScoped();
+        const cliBinPath = path.join(cliBinDir, "cli-bin");
+        const cliClientId = `${"2".repeat(12)}-${"b".repeat(32)}.apps.googleusercontent.com`;
+        const cliClientSecret = `${"GOCSPX"}-${"y".repeat(28)}`;
+        yield* fs.writeFileString(cliBinPath, `${cliClientId}\0${cliClientSecret}`);
+        const { probe, requests, cliTokenPath, authStatePath } = yield* fixture({
+          userId: "google-user-cli",
+          // Leftover enterprise gcpProject must not leak into oauth-personal requests.
+          gcpProject: "stale-enterprise-project",
+          // Native agy CLI ignores stale 1.4.5 acp_token.json files left behind after migration.
+          resolveRuntime: Effect.succeed({
+            executablePath: cliBinPath,
+            usesLegacyTokenFile: false,
+          }),
+          loadCodeAssistByHost: {
+            "daily-cloudcode-pa.googleapis.com": { cloudaicompanionProject: "daily-project" },
+            "cloudcode-pa.googleapis.com": { cloudaicompanionProject: "prod-project" },
+          },
+          loadCodeAssistStatusByHost,
+          expectedProjectByHost,
+          readKeyring: (service) =>
+            Effect.sync(() => {
+              keyringServicesQueried.push(service);
+              return service === "jetski-cli" ? encodedKeyring : undefined;
+            }),
+        });
+
+        // Without persisted ACP auth state or a CLI token file, both keyring and legacy acp_token.json are ignored.
+        expect((yield* probe).unavailable?.reason).toBe("unsupported");
+        expect(keyringServicesQueried).toEqual([]);
+        expect(requests).toEqual([]);
+
+        yield* fs.makeDirectory(path.dirname(authStatePath), { recursive: true });
+        yield* fs.writeFileString(authStatePath, JSON.stringify({ methodId: "oauth-personal" }));
+        const fromKeyring = yield* probe;
+        expect(keyringServicesQueried).toEqual(["jetski-cli"]);
+        expect(fromKeyring.unavailable).toBeUndefined();
+        expect(fromKeyring.windows).toHaveLength(4);
+        expect(JSON.stringify(fromKeyring)).not.toMatch(
+          /cli-keyring-refresh|someone@example\.com|google-user-cli/,
+        );
+        expect(requests.filter((request) => request.url.endsWith(":loadCodeAssist"))).toHaveLength(
+          2,
+        );
+
+        // Transient loadCodeAssist failure on daily host is retried on the next poll; prod host stays cached.
+        delete loadCodeAssistStatusByHost["daily-cloudcode-pa.googleapis.com"];
+        expectedProjectByHost["daily-cloudcode-pa.googleapis.com"] = "daily-project";
+        yield* probe;
+        expect(requests.filter((request) => request.url.endsWith(":loadCodeAssist"))).toHaveLength(
+          3,
+        );
+
+        // Once both hosts succeed, companion projects stay cached across subsequent polls.
+        yield* probe;
+        expect(requests.filter((request) => request.url.endsWith(":loadCodeAssist"))).toHaveLength(
+          3,
+        );
+
+        // Profile-local CLI token files win over the shared OS keyring.
+        yield* fs.writeFileString(
+          cliTokenPath,
+          JSON.stringify({
+            token: { refresh_token: "cli-file-refresh" },
+            auth_method: "consumer",
+          }),
+        );
+        keyringServicesQueried.length = 0;
+        expect((yield* probe).windows).toHaveLength(4);
+        expect(keyringServicesQueried).toEqual([]);
+
+        // Sign-out removes acp-auth-state.json and profile token files.
+        yield* fs.remove(authStatePath);
+        yield* fs.remove(cliTokenPath);
+        expect((yield* probe).unavailable?.reason).toBe("unsupported");
+
+        const hexSecret = Buffer.from(`${encodedKeyring}\n`, "utf8").toString("hex");
+        expect(decodeAntigravityKeyringSecret(hexSecret)).toBe(keyringPayload);
+        const extractedPairs = extractAntigravityOAuthClientPairs(
+          `${"3".repeat(12)}-${"c".repeat(32)}.apps.googleusercontent.com|${"GOCSPX"}-${"z".repeat(28)}`,
+        );
+        expect(extractedPairs).toHaveLength(1);
+
+        // Unexpired access_token in StoredToken skips the OAuth refresh roundtrip entirely.
+        yield* TestClock.setTime(
+          DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:00:00Z")),
+        );
+        const freshAccessFixture = yield* fixture({
+          missingToken: true,
+          resolveRuntime: Effect.succeed({ usesLegacyTokenFile: false }),
+          expectedProjectByHost: {
+            "daily-cloudcode-pa.googleapis.com": "companion-project",
+            "cloudcode-pa.googleapis.com": "companion-project",
+          },
+        });
+        yield* fs.writeFileString(
+          freshAccessFixture.cliTokenPath,
+          JSON.stringify({
+            token: {
+              access_token: "access-token",
+              expiry: "2026-10-21T10:30:00Z",
+            },
+            auth_method: "consumer",
+          }),
+        );
+        expect((yield* freshAccessFixture.probe).windows).toHaveLength(4);
+        expect(
+          freshAccessFixture.requests.filter((request) => request.url.endsWith("/token")),
+        ).toEqual([]);
+
+        // ChildProcessSpawner provided at construction is retained when probe runs without it on darwin.
+        const baseSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const securityCommands: string[] = [];
+        const constructionSpawner = ChildProcessSpawner.ChildProcessSpawner.of({
+          ...baseSpawner,
+          string: (command) =>
+            Effect.sync(() => {
+              securityCommands.push(
+                command._tag === "StandardCommand"
+                  ? `${command.command} ${command.args.join(" ")}`
+                  : command._tag,
+              );
+              return `${hexSecret}\n`;
+            }),
+        });
+        const unprovidedSpawner = ChildProcessSpawner.ChildProcessSpawner.of({
+          ...baseSpawner,
+          string: () => Effect.die("probe should use construction-time spawner"),
+        });
+        const darwinFixture = yield* fixture({
+          missingToken: true,
+          expectedProjectByHost: {
+            "daily-cloudcode-pa.googleapis.com": "companion-project",
+            "cloudcode-pa.googleapis.com": "companion-project",
+          },
+        }).pipe(
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, constructionSpawner),
+        );
+        yield* fs.makeDirectory(path.dirname(darwinFixture.authStatePath), { recursive: true });
+        yield* fs.writeFileString(
+          darwinFixture.authStatePath,
+          JSON.stringify({ methodId: "oauth-personal" }),
+        );
+        const darwinLimits = yield* darwinFixture.probe.pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, unprovidedSpawner),
+        );
+        expect(darwinLimits.windows).toHaveLength(4);
+        expect(securityCommands).toEqual([
+          "/usr/bin/security find-generic-password -s jetski-cli -a gemini -w",
+        ]);
+
+        const fileFixture = yield* fixture({
+          missingToken: true,
+          authMethod: "oauth-business",
+          gcpProject: "enterprise-project",
+          expectedProjectByHost: {
+            "daily-cloudcode-pa.googleapis.com": "enterprise-project",
+            "cloudcode-pa.googleapis.com": "enterprise-project",
+          },
+          readKeyring: () => Effect.undefined,
+        });
+        yield* fs.writeFileString(
+          path.join(fileFixture.acpDirectory, "ccpa-oauth-token"),
+          JSON.stringify({
+            token: { refresh_token: "cli-business-refresh" },
+            auth_method: "gcp",
+          }),
+        );
+        const fromFile = yield* fileFixture.probe;
+        expect(fromFile.unavailable).toBeUndefined();
+        expect(fromFile.windows).toHaveLength(4);
+        expect(
+          fileFixture.requests.filter((request) => request.url.endsWith(":loadCodeAssist")),
+        ).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

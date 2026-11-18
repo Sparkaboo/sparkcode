@@ -3,7 +3,15 @@ import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import { formatTokens, formatUsd, makeWindow } from "@t3tools/shared/usageFormat";
 import { ChartNoAxesColumnIcon, ExternalLinkIcon, Maximize2Icon } from "lucide-react";
-import { memo, type MouseEvent, useEffect, useEffectEvent, useRef, useState } from "react";
+import {
+  Fragment,
+  memo,
+  type MouseEvent,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 
 import { cn } from "../../lib/utils";
 import { ensureLocalApi } from "../../localApi";
@@ -87,20 +95,20 @@ function ProviderUsageRow({ item }: { readonly item: QuickProviderUsageItem }) {
       </div>
 
       {item.windows.length > 0 ? (
-        <div className="flex flex-col gap-1.5 pt-2">
+        <div className="grid grid-cols-[minmax(4.5rem,auto)_minmax(3.5rem,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 pt-2 text-2xs">
           {item.windows.map((window) => {
             const isCritical = window.remainingPercent <= 10;
             const isLow = window.remainingPercent > 10 && window.remainingPercent <= 25;
             return (
-              <div key={window.id} className="flex items-center gap-2 text-2xs">
-                <span className="w-24 shrink-0 truncate text-muted-foreground">{window.label}</span>
+              <Fragment key={window.id}>
+                <span className="max-w-44 truncate text-muted-foreground">{window.label}</span>
                 <div
                   role="progressbar"
                   aria-label={`${item.label} ${window.label}`}
                   aria-valuenow={window.remainingPercent}
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  className="relative h-1.5 min-w-12 flex-1 overflow-hidden rounded-full bg-muted/80"
+                  className="relative h-1.5 min-w-14 overflow-hidden rounded-full bg-muted/80"
                 >
                   {window.remainingPercent > 0 ? (
                     <div
@@ -129,7 +137,7 @@ function ProviderUsageRow({ item }: { readonly item: QuickProviderUsageItem }) {
                     </span>
                   ) : null}
                 </div>
-              </div>
+              </Fragment>
             );
           })}
         </div>

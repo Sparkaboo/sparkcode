@@ -55,6 +55,31 @@ describe("deriveQuickUsageOverview", () => {
                 },
               }),
               makeProvider({
+                instanceId: ProviderInstanceId.make("antigravity"),
+                driver: ProviderDriverKind.make("antigravity"),
+                usageLimits: {
+                  checkedAt: "2026-11-13T11:58:00.000Z",
+                  windows: [
+                    {
+                      id: "3p-5h",
+                      kind: "session",
+                      label: "Claude & GPT (shared) · 5-hour",
+                      usedPercent: 20,
+                      windowDurationMins: 300,
+                      resetsAt: "2026-11-13T15:00:00.000Z",
+                    },
+                    {
+                      id: "gemini-weekly",
+                      kind: "weekly",
+                      label: "Gemini · Weekly",
+                      usedPercent: 10,
+                      windowDurationMins: 10_080,
+                      resetsAt: "2026-11-18T12:00:00.000Z",
+                    },
+                  ],
+                },
+              }),
+              makeProvider({
                 instanceId: ProviderInstanceId.make("opencode"),
                 driver: ProviderDriverKind.make("opencode"),
               }),
@@ -113,7 +138,12 @@ describe("deriveQuickUsageOverview", () => {
       now,
     });
 
-    expect(overview.items.map((item) => item.label)).toEqual(["Claude Code", "Pi", "OpenCode"]);
+    expect(overview.items.map((item) => item.label)).toEqual([
+      "Claude Code",
+      "Antigravity",
+      "Pi",
+      "OpenCode",
+    ]);
     expect(overview.items[0]).toMatchObject({
       label: "Claude Code",
       recentCostUsd: 3.25,
@@ -127,12 +157,27 @@ describe("deriveQuickUsageOverview", () => {
       ],
     });
     expect(overview.items[1]).toMatchObject({
+      label: "Antigravity",
+      windows: [
+        {
+          label: "Gemini · Weekly",
+          remainingPercent: 90,
+          resetsLabel: "↻ 5d 0h",
+        },
+        {
+          label: "Claude & GPT · 5-hour",
+          remainingPercent: 80,
+          resetsLabel: "↻ 3h 0m",
+        },
+      ],
+    });
+    expect(overview.items[2]).toMatchObject({
       label: "Pi",
       recentCostUsd: 1.25,
       recentTokens: 100_000,
       windows: [],
     });
-    expect(overview.items[2]).toMatchObject({
+    expect(overview.items[3]).toMatchObject({
       label: "OpenCode",
       recentCostUsd: null,
       recentTokens: 0,
@@ -192,7 +237,7 @@ describe("deriveQuickUsageOverview", () => {
     });
   });
 
-  it("filters out hidden providers", () => {
+  it("filters out hidden providers and deduplicates inline unavailable messages", () => {
     const presentations: LimitPresentations = new Map([
       [
         EnvironmentId.make("env-local"),
@@ -203,10 +248,40 @@ describe("deriveQuickUsageOverview", () => {
               makeProvider({
                 instanceId: ProviderInstanceId.make("codex"),
                 driver: ProviderDriverKind.make("codex"),
+                usageLimits: {
+                  checkedAt: "2026-11-13T11:58:00.000Z",
+                  windows: [],
+                  unavailable: {
+                    reason: "probeFailed",
+                    message: "Could not read Codex limits.",
+                  },
+                },
+              }),
+              makeProvider({
+                instanceId: ProviderInstanceId.make("antigravity"),
+                driver: ProviderDriverKind.make("antigravity"),
+                status: "warning",
+                auth: { status: "unknown" },
+                usageLimits: {
+                  checkedAt: "2026-11-13T11:58:00.000Z",
+                  windows: [],
+                  unavailable: {
+                    reason: "unsupported",
+                    message: "Sign in with Google to see Antigravity limits.",
+                  },
+                },
               }),
               makeProvider({
                 instanceId: ProviderInstanceId.make("cursor"),
                 driver: ProviderDriverKind.make("cursor"),
+                usageLimits: {
+                  checkedAt: "2026-11-13T11:58:00.000Z",
+                  windows: [],
+                  unavailable: {
+                    reason: "probeFailed",
+                    message: "Hidden provider error should not leak.",
+                  },
+                },
               }),
             ],
           },
@@ -218,14 +293,29 @@ describe("deriveQuickUsageOverview", () => {
       presentations,
       mergedUsage: {
         costUsd: 0,
-        totalTokens: 0,
-        providers: [],
+        totalTokens: 10_000,
+        providers: [
+          {
+            provider: "antigravity",
+            costUsd: 0,
+            totalTokens: 10_000,
+            records: 1,
+            sessions: 1,
+            costShare: 0,
+            tokenShare: 1,
+          },
+        ],
         models: [],
       },
       now,
       hiddenProviders: new Set(["cursor"]),
     });
 
-    expect(overview.items.map((item) => item.label)).toEqual(["Codex"]);
+    expect(overview.items.map((item) => item.label)).toEqual(["Antigravity", "Codex"]);
+    expect(overview.items[0]?.unavailableMessage).toBe(
+      "Sign in with Google to see Antigravity limits.",
+    );
+    expect(overview.items[1]?.unavailableMessage).toBe("Could not read Codex limits.");
+    expect(overview.notices).toEqual([]);
   });
 });

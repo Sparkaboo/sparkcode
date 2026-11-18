@@ -427,11 +427,22 @@ export const AntigravityDriver: ProviderDriver<
     const usage = yield* makeAntigravityUsageProbe({
       profileDirectory,
       authMethod: auth.authMethod,
+      ...(auth.authMethod === "oauth-business" && auth.gcpProject
+        ? { gcpProject: auth.gcpProject }
+        : {}),
+      resolveRuntime: installation.resolve(settings.binaryPath, processEnvironment).pipe(
+        Effect.map((executable) => ({
+          executablePath: executable.executablePath,
+          usesLegacyTokenFile: executable.harnessPath !== null,
+        })),
+        Effect.orElseSucceed(() => undefined),
+      ),
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
       Effect.provideService(Digest.Digest, digest),
       Effect.provideService(HttpClient.HttpClient, httpClient),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     const provider = yield* makeAntigravityProvider(settings, {
       environment: processEnvironment,

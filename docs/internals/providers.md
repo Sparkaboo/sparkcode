@@ -37,8 +37,9 @@ session's cwd. Provider switches still use portable handoff summaries.
 See the [adapter](../../packages/provider-pi/src/server/adapter.ts).
 
 Antigravity separates account profiles per instance while sharing installed executables across the
-environment. It forces file-based credential storage because the native macOS keychain entry would
-otherwise be shared across instances. The launch environment removes ambient Google credentials,
+environment. The 1.4.5 bundle forces file-based credential storage (`acp_token.json`); the native
+`agy` CLI records each profile's active sign-in under `cache/acp-auth-state.json` and stores tokens
+in profile `*-oauth-token` files or the OS keyring when file storage is inactive. The launch environment removes ambient Google credentials,
 so an instance cannot silently use another account or billing project. The agent also resolves
 its user-global skill directories under that profile, so the profile links those two directories
 back to the user's real `~/.gemini`; MCP servers, hooks, and rules there stay out of the profile.

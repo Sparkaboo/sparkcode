@@ -9,6 +9,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import {
   makeUnavailableUsageLimits,
@@ -27,6 +29,19 @@ const ENDPOINTS = {
   "oauth-personal": [DAILY_ENDPOINT, PROD_ENDPOINT],
   "oauth-business": [PROD_ENDPOINT, DAILY_ENDPOINT],
 };
+const GOOGLE_OAUTH_CLIENT_ID_PATTERN = /\b\d{10,}-[a-z0-9]{24,40}\.apps\.googleusercontent\.com\b/g;
+const GOOGLE_OAUTH_CLIENT_SECRET_PATTERN = /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g;
+const MAX_CLI_BINARY_BYTES = 256n * 1024n * 1024n;
+const KEYRING_SERVICES = {
+  "oauth-personal": ["jetski-cli", "antigravity"],
+  "oauth-business": ["antigravity", "jetski-cli"],
+} as const;
+const CLI_TOKEN_FILENAMES = {
+  "oauth-personal": ["jetski-oauth-token", "antigravity-oauth-token", "ccpa-oauth-token"],
+  "oauth-business": ["ccpa-oauth-token", "antigravity-oauth-token", "jetski-oauth-token"],
+} as const;
+const KEYRING_ACCOUNT = "gemini";
+const GO_KEYRING_BASE64_PREFIX = "go-keyring-base64:";
 const SUMMARY_WINDOW_MINS = new Map([
   ["5h", 5 * 60],
   ["weekly", 7 * 24 * 60],
@@ -37,6 +52,28 @@ const TokenFile = Schema.Struct({
   client_secret: Schema.NonEmptyString,
   refresh_token: Schema.NonEmptyString,
   project_id: Schema.optional(Schema.String),
+});
+const AcpAuthState = Schema.Struct({
+  methodId: Schema.optional(Schema.String),
+});
+const CliStoredToken = Schema.Struct({
+  token: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        access_token: Schema.optional(Schema.String),
+        refresh_token: Schema.optional(Schema.String),
+        expiry: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
+  refresh_token: Schema.optional(Schema.String),
+  auth_method: Schema.optional(Schema.String),
+  project_id: Schema.optional(Schema.String),
+});
+const LoadCodeAssistResponse = Schema.Struct({
+  cloudaicompanionProject: Schema.optional(
+    Schema.Union([Schema.String, Schema.Struct({ id: Schema.optional(Schema.String) })]),
+  ),
 });
 const TokenResponse = Schema.Struct({
   access_token: Schema.NonEmptyString,
@@ -78,10 +115,179 @@ const Models = Schema.Struct({
 });
 
 const decodeTokenFile = Schema.decodeEffect(Schema.fromJsonString(TokenFile));
+const decodeAcpAuthState = Schema.decodeEffect(Schema.fromJsonString(AcpAuthState));
+const decodeCliStoredToken = Schema.decodeEffect(Schema.fromJsonString(CliStoredToken));
+const decodeLoadCodeAssist = Schema.decodeUnknownEffect(LoadCodeAssistResponse);
 const decodeTokenResponse = Schema.decodeUnknownEffect(TokenResponse);
 const decodeUserInfo = Schema.decodeUnknownEffect(UserInfo);
 const decodeSummary = Schema.decodeUnknownEffect(Summary);
 const decodeModels = Schema.decodeUnknownEffect(Models);
+
+export function decodeAntigravityKeyringSecret(raw: string): string | undefined {
+  let text = raw.trim();
+  if (!text) return undefined;
+  // macOS `/usr/bin/security -w` hex-encodes secrets containing newlines or non-ASCII bytes.
+  if (/^(?:[0-9a-fA-F]{2})+$/u.test(text)) {
+    text = Buffer.from(text, "hex").toString("utf8").trim();
+  }
+  if (text.startsWith(GO_KEYRING_BASE64_PREFIX)) {
+    text = Buffer.from(text.slice(GO_KEYRING_BASE64_PREFIX.length), "base64")
+      .toString("utf8")
+      .trim();
+  }
+  return text || undefined;
+}
+
+function decodeKeyringBytes(bytes: Uint8Array | undefined): string | undefined {
+  if (!bytes || bytes.byteLength === 0) return undefined;
+  const encoding = bytes.byteLength >= 2 && bytes[1] === 0 ? "utf-16le" : "utf-8";
+  const text = new TextDecoder(encoding).decode(bytes).trim();
+  return text || undefined;
+}
+
+function matchesCliAuthMethod(
+  storedMethod: string | undefined,
+  authMethod: "oauth-personal" | "oauth-business",
+): boolean {
+  const normalized = storedMethod?.trim();
+  if (!normalized) return true;
+  return authMethod === "oauth-personal"
+    ? normalized === "consumer" || normalized === "oauth-personal"
+    : normalized === "gcp" || normalized === "oauth-business";
+}
+
+export interface AntigravityOAuthClientPair {
+  readonly client_id: string;
+  readonly client_secret: string;
+}
+
+export function extractAntigravityOAuthClientPairs(
+  binaryText: string,
+): ReadonlyArray<AntigravityOAuthClientPair> {
+  const clientIds = [...new Set(binaryText.match(GOOGLE_OAUTH_CLIENT_ID_PATTERN) ?? [])].slice(
+    0,
+    6,
+  );
+  const clientSecrets = [
+    ...new Set(binaryText.match(GOOGLE_OAUTH_CLIENT_SECRET_PATTERN) ?? []),
+  ].slice(0, 6);
+  const pairs: AntigravityOAuthClientPair[] = [];
+  const seen = new Set<string>();
+  const add = (clientId: string | undefined, clientSecret: string | undefined) => {
+    if (!clientId || !clientSecret) return;
+    const key = `${clientId}\0${clientSecret}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    pairs.push({ client_id: clientId, client_secret: clientSecret });
+  };
+  const diagonalCount = Math.min(clientIds.length, clientSecrets.length);
+  for (let index = 0; index < diagonalCount; index += 1) {
+    add(clientIds[index], clientSecrets[index]);
+  }
+  for (const clientId of clientIds) {
+    for (const clientSecret of clientSecrets) {
+      add(clientId, clientSecret);
+    }
+  }
+  return pairs;
+}
+
+type LoadedCredentials =
+  | ({ readonly kind: "legacy" } & typeof TokenFile.Type)
+  | {
+      readonly kind: "cli";
+      readonly refresh_token?: string | undefined;
+      readonly access_token?: string | undefined;
+      readonly expires_at?: number | undefined;
+      readonly project_id?: string | undefined;
+    };
+
+function resolveCliCredentials(
+  stored: typeof CliStoredToken.Type,
+  authMethod: "oauth-personal" | "oauth-business",
+  fallbackProjectId?: string,
+): LoadedCredentials | undefined {
+  if (!matchesCliAuthMethod(stored.auth_method, authMethod)) return undefined;
+  const refreshToken = (stored.token?.refresh_token ?? stored.refresh_token)?.trim() || undefined;
+  const accessToken = stored.token?.access_token?.trim() || undefined;
+  if (!refreshToken && !accessToken) return undefined;
+  const parsedExpiry = stored.token?.expiry ? Date.parse(stored.token.expiry) : Number.NaN;
+  const expiresAt = Number.isFinite(parsedExpiry) ? parsedExpiry : undefined;
+  const projectId = stored.project_id?.trim() || fallbackProjectId?.trim();
+  return {
+    kind: "cli",
+    ...(refreshToken ? { refresh_token: refreshToken } : {}),
+    ...(accessToken ? { access_token: accessToken } : {}),
+    ...(expiresAt !== undefined ? { expires_at: expiresAt } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+  };
+}
+
+function extractCompanionProject(response: typeof LoadCodeAssistResponse.Type): string | undefined {
+  const value = response.cloudaicompanionProject;
+  const raw = typeof value === "string" ? value : value?.id;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+class AntigravityKeyringReadError extends Schema.TaggedError<
+  AntigravityKeyringReadError,
+  { readonly brand: unique symbol }
+>()("AntigravityKeyringReadError", { cause: Schema.Defect() }) {}
+
+const readSystemKeyringSecret = Effect.fn("AntigravityUsageProbe.readSystemKeyringSecret")(
+  function* (
+    platform: NodeJS.Platform,
+    spawner: Option.Option<ChildProcessSpawner.ChildProcessSpawner["Service"]>,
+    service: string,
+  ) {
+    if (platform === "darwin") {
+      // `zalando/go-keyring` creates the macOS item via `/usr/bin/security`, which owns its ACL;
+      // reading through `/usr/bin/security` avoids triggering a per-app Keychain modal prompt.
+      if (Option.isNone(spawner)) return undefined;
+      return yield* spawner.value
+        .string(
+          ChildProcess.make(
+            "/usr/bin/security",
+            ["find-generic-password", "-s", service, "-a", KEYRING_ACCOUNT, "-w"],
+            { stdin: "ignore", stderr: "ignore" },
+          ),
+        )
+        .pipe(
+          Effect.timeout("5 seconds"),
+          Effect.orElseSucceed(() => undefined),
+        );
+    }
+    if (platform === "win32" || platform === "linux") {
+      return yield* Effect.tryPromise({
+        try: async () => {
+          const Keyring = await import("@napi-rs/keyring");
+          if (platform === "win32") {
+            // `zalando/go-keyring` names Windows Generic Credentials `<service>:<user>`.
+            try {
+              const targeted = await Keyring.AsyncEntry.withTarget(
+                `${service}:${KEYRING_ACCOUNT}`,
+                service,
+                KEYRING_ACCOUNT,
+              ).getSecret();
+              const decoded = decodeKeyringBytes(targeted);
+              if (decoded !== undefined) return decoded;
+            } catch {
+              // Fall back to the default entry lookup below.
+            }
+          }
+          const secret = await new Keyring.AsyncEntry(service, KEYRING_ACCOUNT).getSecret();
+          return decodeKeyringBytes(secret);
+        },
+        catch: (cause) => new AntigravityKeyringReadError({ cause }),
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.orElseSucceed(() => undefined),
+      );
+    }
+    return undefined;
+  },
+);
 
 function iso(value: string | undefined): string | undefined {
   const parsed = value ? DateTime.make(value) : Option.none();
@@ -207,19 +413,54 @@ function modelWindows(models: typeof Models.Type) {
   return [...windows.values()];
 }
 
+export interface AntigravityUsageRuntimeInfo {
+  readonly executablePath?: string | undefined;
+  readonly usesLegacyTokenFile: boolean;
+}
+
+class AntigravityOAuthRefreshError extends Schema.TaggedError<
+  AntigravityOAuthRefreshError,
+  { readonly brand: unique symbol }
+>()("AntigravityOAuthRefreshError", { detail: Schema.String }) {}
+
+const binaryOAuthPairCache = new Map<
+  string,
+  { readonly cacheKey: string; readonly pairs: ReadonlyArray<AntigravityOAuthClientPair> }
+>();
+
 export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(function* (input: {
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
+  readonly gcpProject?: string | undefined;
+  readonly resolveRuntime?: Effect.Effect<AntigravityUsageRuntimeInfo | undefined> | undefined;
+  readonly readKeyring?: ((service: string) => Effect.Effect<string | undefined>) | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
   const crypto = yield* Digest.Digest;
+  const spawner = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner);
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
-  const tokenPath = path.join(input.profileDirectory, "antigravity-acp", "acp_token.json");
+  const acpDirectory = path.join(input.profileDirectory, "antigravity-acp");
+  const legacyTokenPath = path.join(acpDirectory, "acp_token.json");
+  const authStatePath = path.join(acpDirectory, "cache", "acp-auth-state.json");
+  const resolveRuntime: Effect.Effect<AntigravityUsageRuntimeInfo | undefined> =
+    input.resolveRuntime ?? Effect.succeed({ usesLegacyTokenFile: true });
+  const readKeyring =
+    input.readKeyring ?? ((service: string) => readSystemKeyringSecret(platform, spawner, service));
+  const preferredPairByMethod = new Map<
+    "oauth-personal" | "oauth-business",
+    AntigravityOAuthClientPair
+  >();
   let cached:
-    | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
+    | {
+        fingerprint: string;
+        account: string;
+        accessToken: string;
+        expiresAt: number;
+        projectsByEndpoint: Map<string, string | undefined>;
+      }
     | undefined;
   let generation = 0;
 
@@ -230,13 +471,162 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       Effect.flatMap((response) => response.json),
       Effect.timeout("10 seconds"),
     );
+
+  const loadCliOAuthPairs = Effect.fn("AntigravityUsageProbe.loadCliOAuthPairs")(function* (
+    executablePath: string | undefined,
+    authMethod: "oauth-personal" | "oauth-business",
+  ) {
+    if (!executablePath || !(yield* fs.exists(executablePath))) return [];
+    const info = yield* fs.stat(executablePath).pipe(Effect.orElseSucceed(() => undefined));
+    if (!info || info.type !== "File" || info.size > MAX_CLI_BINARY_BYTES) return [];
+    const mtimeKey = Option.isSome(info.mtime) ? String(info.mtime.value.getTime()) : "";
+    const cacheKey = `${info.size}\0${mtimeKey}`;
+    let extracted = binaryOAuthPairCache.get(executablePath);
+    if (extracted?.cacheKey !== cacheKey) {
+      const bytes = yield* fs
+        .readFile(executablePath)
+        .pipe(Effect.orElseSucceed(() => new Uint8Array()));
+      const pairs =
+        bytes.byteLength > 0
+          ? extractAntigravityOAuthClientPairs(Buffer.from(bytes).toString("latin1"))
+          : [];
+      extracted = { cacheKey, pairs };
+      if (pairs.length > 0) {
+        binaryOAuthPairCache.set(executablePath, extracted);
+      }
+    }
+    const preferred = preferredPairByMethod.get(authMethod);
+    if (!preferred) return extracted.pairs;
+    return [
+      preferred,
+      ...extracted.pairs.filter(
+        (pair) =>
+          pair.client_id !== preferred.client_id || pair.client_secret !== preferred.client_secret,
+      ),
+    ];
+  });
+
+  const loadToken = Effect.fn("AntigravityUsageProbe.loadToken")(function* (
+    authMethod: "oauth-personal" | "oauth-business",
+    usesLegacyTokenFile: boolean,
+  ) {
+    const cliFileStored: Array<typeof CliStoredToken.Type> = [];
+    for (const filename of CLI_TOKEN_FILENAMES[authMethod]) {
+      const candidatePath = path.join(acpDirectory, filename);
+      if (!(yield* fs.exists(candidatePath))) continue;
+      const parsed = yield* fs.readFileString(candidatePath).pipe(
+        Effect.flatMap(decodeCliStoredToken),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (parsed && matchesCliAuthMethod(parsed.auth_method, authMethod)) {
+        cliFileStored.push(parsed);
+      }
+    }
+    const fallbackProjectId = cliFileStored.find((entry) => entry.project_id?.trim())?.project_id;
+    // Prefer profile-local CLI token files before consulting the shared OS keyring.
+    for (const stored of cliFileStored) {
+      const fromCliFile = resolveCliCredentials(stored, authMethod, fallbackProjectId);
+      if (fromCliFile) return fromCliFile;
+    }
+    const persistedMethod = (yield* fs.exists(authStatePath))
+      ? yield* fs.readFileString(authStatePath).pipe(
+          Effect.flatMap(decodeAcpAuthState),
+          Effect.map((state) => state.methodId?.trim()),
+          Effect.orElseSucceed(() => undefined),
+        )
+      : undefined;
+    // Only consult the shared OS keyring when this ACP profile recorded a matching sign-in.
+    if (persistedMethod === authMethod || persistedMethod === "terminal-login") {
+      for (const service of KEYRING_SERVICES[authMethod]) {
+        const keyringRaw = yield* readKeyring(service);
+        const decodedKeyring = keyringRaw ? decodeAntigravityKeyringSecret(keyringRaw) : undefined;
+        const keyringStored = decodedKeyring
+          ? yield* decodeCliStoredToken(decodedKeyring).pipe(Effect.orElseSucceed(() => undefined))
+          : undefined;
+        const fromKeyring = keyringStored
+          ? resolveCliCredentials(keyringStored, authMethod, fallbackProjectId)
+          : undefined;
+        if (fromKeyring) return fromKeyring;
+      }
+    }
+    if (usesLegacyTokenFile && (yield* fs.exists(legacyTokenPath))) {
+      return yield* fs.readFileString(legacyTokenPath).pipe(
+        Effect.flatMap(decodeTokenFile),
+        Effect.map((legacy): LoadedCredentials => ({ kind: "legacy", ...legacy })),
+        Effect.orElseSucceed(() => undefined),
+      );
+    }
+    return undefined;
+  });
+
+  const refreshAccessToken = Effect.fn("AntigravityUsageProbe.refreshAccessToken")(function* (
+    token: LoadedCredentials,
+    authMethod: "oauth-personal" | "oauth-business",
+    executablePath: string | undefined,
+    now: number,
+  ) {
+    const refreshWithPair = (pair: AntigravityOAuthClientPair, refreshToken: string) =>
+      request(
+        HttpClientRequest.post("https://oauth2.googleapis.com/token").pipe(
+          HttpClientRequest.bodyUrlParams({
+            client_id: pair.client_id,
+            client_secret: pair.client_secret,
+            refresh_token: refreshToken,
+            grant_type: "refresh_token",
+          }),
+        ),
+      ).pipe(Effect.flatMap(decodeTokenResponse));
+
+    if (token.kind === "legacy") {
+      const refreshed = yield* refreshWithPair(token, token.refresh_token);
+      return {
+        accessToken: refreshed.access_token,
+        expiresAt: now + refreshed.expires_in * 1000,
+      };
+    }
+    if (
+      token.access_token !== undefined &&
+      token.expires_at !== undefined &&
+      token.expires_at > now + 60_000
+    ) {
+      return {
+        accessToken: token.access_token,
+        expiresAt: token.expires_at,
+      };
+    }
+    if (!token.refresh_token) {
+      return yield* new AntigravityOAuthRefreshError({
+        detail: "Missing Antigravity refresh token.",
+      });
+    }
+    const pairs = yield* loadCliOAuthPairs(executablePath, authMethod);
+    for (const pair of pairs) {
+      const refreshed = yield* refreshWithPair(pair, token.refresh_token).pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (refreshed) {
+        preferredPairByMethod.set(authMethod, pair);
+        return {
+          accessToken: refreshed.access_token,
+          expiresAt: now + refreshed.expires_in * 1000,
+        };
+      }
+    }
+    return yield* new AntigravityOAuthRefreshError({
+      detail: "Could not refresh Antigravity OAuth token.",
+    });
+  });
+
   const read = Effect.gen(function* () {
     const startedGeneration = generation;
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }
-    if (!(yield* fs.exists(tokenPath))) {
+    const authMethod = input.authMethod;
+    const runtime = yield* resolveRuntime;
+    const token = yield* loadToken(authMethod, runtime?.usesLegacyTokenFile ?? false);
+    if (!token) {
       cached = undefined;
       return makeUnavailableUsageLimits({
         checkedAt,
@@ -244,26 +634,23 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
         message: "Sign in with Google to see Antigravity limits.",
       });
     }
-    const token = yield* fs.readFileString(tokenPath).pipe(Effect.flatMap(decodeTokenFile));
+    const configuredProject =
+      (authMethod === "oauth-business" ? input.gcpProject?.trim() : undefined) ||
+      token.project_id?.trim() ||
+      undefined;
     const fingerprint = yield* sha256(
-      `${token.client_id}\0${token.refresh_token}\0${token.project_id ?? ""}`,
+      token.kind === "legacy"
+        ? `legacy\0${token.client_id}\0${token.refresh_token}\0${configuredProject ?? ""}`
+        : `cli\0${authMethod}\0${token.refresh_token ?? token.access_token ?? ""}\0${configuredProject ?? ""}`,
     );
     const now = yield* Clock.currentTimeMillis;
     let accessToken: string;
     let account: string;
+    let projectsByEndpoint: Map<string, string | undefined>;
     if (cached?.fingerprint !== fingerprint || cached.expiresAt <= now + 60_000) {
       cached = undefined;
-      const refreshed = yield* request(
-        HttpClientRequest.post("https://oauth2.googleapis.com/token").pipe(
-          HttpClientRequest.bodyUrlParams({
-            client_id: token.client_id,
-            client_secret: token.client_secret,
-            refresh_token: token.refresh_token,
-            grant_type: "refresh_token",
-          }),
-        ),
-      ).pipe(Effect.flatMap(decodeTokenResponse));
-      accessToken = refreshed.access_token;
+      const refreshed = yield* refreshAccessToken(token, authMethod, runtime?.executablePath, now);
+      accessToken = refreshed.accessToken;
       // Use Google account IDs to merge accounts across environments; refresh tokens differ per machine.
       account = yield* request(
         HttpClientRequest.get("https://www.googleapis.com/oauth2/v2/userinfo").pipe(
@@ -273,19 +660,48 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
         Effect.flatMap(antigravityAccountFingerprint),
         Effect.orElseSucceed(() => fingerprint),
       );
+      projectsByEndpoint = new Map();
       if (generation === startedGeneration) {
         cached = {
           fingerprint,
           account,
           accessToken,
-          expiresAt: now + refreshed.expires_in * 1000,
+          expiresAt: refreshed.expiresAt,
+          projectsByEndpoint,
         };
       }
     } else {
       accessToken = cached.accessToken;
       account = cached.account;
+      projectsByEndpoint = cached.projectsByEndpoint;
     }
-    const endpoints = ENDPOINTS[input.authMethod];
+    const endpoints = ENDPOINTS[authMethod];
+    const resolveEndpointProject = Effect.fn("AntigravityUsageProbe.resolveEndpointProject")(
+      function* (endpoint: string) {
+        if (configuredProject !== undefined) return configuredProject;
+        if (projectsByEndpoint.has(endpoint)) return projectsByEndpoint.get(endpoint);
+        const resolved = yield* request(
+          HttpClientRequest.post(`${endpoint}/v1internal:loadCodeAssist`).pipe(
+            HttpClientRequest.setHeaders({
+              Authorization: `Bearer ${accessToken}`,
+              "User-Agent": antigravityUserAgent(platform, architecture),
+            }),
+            HttpClientRequest.bodyJsonUnsafe({ metadata: { ideType: "ANTIGRAVITY" } }),
+          ),
+        ).pipe(
+          Effect.flatMap(decodeLoadCodeAssist),
+          Effect.map((response) => ({
+            ok: true as const,
+            project: extractCompanionProject(response),
+          })),
+          Effect.orElseSucceed(() => ({ ok: false as const, project: undefined })),
+        );
+        if (resolved.ok && generation === startedGeneration) {
+          projectsByEndpoint.set(endpoint, resolved.project);
+        }
+        return resolved.project;
+      },
+    );
     // Merge endpoints because quota groups differ; the metered host's reading of a bucket wins.
     const fetchWindows = Effect.fn("AntigravityUsageProbe.fetchWindows")(function* <E>(
       operation: string,
@@ -298,6 +714,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
         endpoints,
         (endpoint) =>
           Effect.gen(function* () {
+            const project = yield* resolveEndpointProject(endpoint);
             // Capture each request after auth, so refresh latency does not widen the tolerance.
             const requestedAt = yield* Clock.currentTimeMillis;
             return yield* request(
@@ -306,9 +723,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
                   Authorization: `Bearer ${accessToken}`,
                   "User-Agent": antigravityUserAgent(platform, architecture),
                 }),
-                HttpClientRequest.bodyJsonUnsafe(
-                  token.project_id ? { project: token.project_id } : {},
-                ),
+                HttpClientRequest.bodyJsonUnsafe(project ? { project } : {}),
               ),
             ).pipe(
               Effect.flatMap((response) => parse(response, requestedAt)),

@@ -31,7 +31,6 @@ export interface QuickLimitWindowSummary {
 export interface QuickProviderUsageItem {
   readonly key: string;
   readonly driver: ServerProvider["driver"];
-  readonly usageProvider: UsageProviderKind | null;
   readonly label: string;
   readonly barColor: string;
   readonly accountCount: number;
@@ -68,6 +67,13 @@ function compactResetLabel(poolWindow: LimitPoolWindow, now: number): string | n
   return formatted.replace(/^resets in /i, "↻ ");
 }
 
+function compactWindowLabel(driver: ServerProvider["driver"], label: string): string {
+  if (driver === "antigravity") {
+    return label.replace(" (shared)", "");
+  }
+  return label;
+}
+
 function resolveDriverLabel(
   driver: ServerProvider["driver"],
   usageProvider: UsageProviderKind | null,
@@ -99,9 +105,37 @@ export function deriveQuickUsageOverview(input: {
     return usageKind !== undefined && hiddenProviders.has(usageKind);
   };
 
-  const accounts = collectLimitAccounts(presentations).filter(
-    (account) => !isHiddenDriver(account.driver),
-  );
+  const visiblePresentations: LimitPresentations =
+    !hiddenProviders || hiddenProviders.size === 0
+      ? presentations
+      : new Map(
+          [...presentations].map(([id, presentation]) => {
+            const config = presentation.serverConfig;
+            if (config === null) return [id, presentation] as const;
+            return [
+              id,
+              {
+                ...presentation,
+                serverConfig: {
+                  ...config,
+                  providers: config.providers.filter(
+                    (provider) => !isHiddenDriver(provider.driver),
+                  ),
+                  usageLimitSources: config.usageLimitSources?.flatMap((source) => {
+                    const accounts = source.accounts.filter(
+                      (account) => !isHiddenDriver(account.driver),
+                    );
+                    return accounts.length === 0 && source.accounts.length > 0
+                      ? []
+                      : [{ ...source, accounts }];
+                  }),
+                },
+              },
+            ] as const;
+          }),
+        );
+
+  const accounts = collectLimitAccounts(visiblePresentations);
   const pools = collectLimitPools(accounts, now);
   const poolByDriver = new Map(pools.map((pool) => [pool.driver, pool]));
 
@@ -114,9 +148,8 @@ export function deriveQuickUsageOverview(input: {
     }
   >();
 
-  for (const presentation of presentations.values()) {
+  for (const presentation of visiblePresentations.values()) {
     for (const provider of presentation.serverConfig?.providers ?? []) {
-      if (isHiddenDriver(provider.driver)) continue;
       if (!provider.enabled || !provider.installed || !isProviderAvailable(provider)) continue;
       const isAuthenticated = provider.auth.status === "authenticated";
       if (!isAuthenticated && provider.usageLimits === undefined) continue;
@@ -131,10 +164,7 @@ export function deriveQuickUsageOverview(input: {
           ? provider.usageLimits.externalUsage.url
           : existing.externalUsageUrl;
       const unavailableMsg =
-        provider.usageLimits?.unavailable?.reason &&
-        provider.usageLimits.unavailable.reason !== "unsupported"
-          ? (provider.usageLimits.unavailable.message ?? existing.unavailableMessage)
-          : existing.unavailableMessage;
+        provider.usageLimits?.unavailable?.message ?? existing.unavailableMessage;
 
       providerMetaByDriver.set(provider.driver, {
         connected: existing.connected || isAuthenticated,
@@ -168,7 +198,9 @@ export function deriveQuickUsageOverview(input: {
     const windows: QuickLimitWindowSummary[] = pool
       ? displayLimitWindows(pool).map((window) => {
           const details = driver === "cursor" ? cursorUsageWindowDetails(window.id, pool) : null;
-          const label = details ? (details.label ?? "Overall") : window.label;
+          const label = details
+            ? (details.label ?? "Overall")
+            : compactWindowLabel(driver, window.label);
           return {
             id: `${window.kind}:${window.id}`,
             label,
@@ -199,7 +231,6 @@ export function deriveQuickUsageOverview(input: {
     unsortedItems.push({
       key: String(driver),
       driver,
-      usageProvider,
       label: resolveDriverLabel(driver, usageProvider),
       barColor: barColor(driver),
       accountCount: pool?.accounts.length ?? 0,
@@ -210,6 +241,31 @@ export function deriveQuickUsageOverview(input: {
       externalUsageUrl: meta?.externalUsageUrl ?? null,
     });
   }
+
+  const inlineNoticeDrivers = new Set(
+    unsortedItems.filter((item) => item.unavailableMessage !== null).map((item) => item.driver),
+  );
+  const noticePresentations: LimitPresentations =
+    inlineNoticeDrivers.size === 0
+      ? visiblePresentations
+      : new Map(
+          [...visiblePresentations].map(([id, presentation]) => {
+            const config = presentation.serverConfig;
+            if (config === null) return [id, presentation] as const;
+            return [
+              id,
+              {
+                ...presentation,
+                serverConfig: {
+                  ...config,
+                  providers: config.providers.filter(
+                    (provider) => !inlineNoticeDrivers.has(provider.driver),
+                  ),
+                },
+              },
+            ] as const;
+          }),
+        );
 
   const activityTier = (item: QuickProviderUsageItem): number => {
     if (item.windows.length > 0) return 0;
@@ -231,7 +287,7 @@ export function deriveQuickUsageOverview(input: {
     mergedUsage.models.length > 0 &&
     mergedUsage.models.every(isModelCostUnknown);
 
-  const notices = collectLimitNotices(presentations);
+  const notices = collectLimitNotices(noticePresentations);
 
   return {
     items,

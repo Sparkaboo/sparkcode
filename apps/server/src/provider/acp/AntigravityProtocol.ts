@@ -487,17 +487,49 @@ const ANTIGRAVITY_SUBAGENT_TITLES = new Set([
   "Run invoke_subagent?",
 ]);
 
+export interface AntigravityChildLaunch {
+  readonly role: string;
+  readonly prompt: string;
+}
+
+const SingleSubagentLaunch = Schema.Struct({
+  Role: Schema.String,
+  Prompt: Schema.String,
+});
+
+const BatchSubagentLaunch = Schema.Struct({
+  Subagents: Schema.NonEmptyArray(SingleSubagentLaunch),
+});
+
+const decodeLaunchInput = Schema.decodeUnknownOption(
+  Schema.Union([BatchSubagentLaunch, SingleSubagentLaunch]),
+);
+
+/** `invoke_subagent` arguments, from the tool call, permission prompt, or persisted record. */
+export function antigravitySubagentLaunches(
+  input: unknown,
+): ReadonlyArray<AntigravityChildLaunch> | undefined {
+  return Option.getOrUndefined(
+    Option.map(decodeLaunchInput(input), (decoded) => {
+      const entries = "Subagents" in decoded ? decoded.Subagents : [decoded];
+      return entries.map((entry) => ({ role: entry.Role, prompt: entry.Prompt }));
+    }),
+  );
+}
+
 /** The ACP agent reports subagent calls as ordinary tools without child IDs or models. */
 export function classifyAntigravitySubagentToolCall(
   toolCall: AcpToolCallState,
   rawPayload?: unknown,
 ): "subagent" | "mcp" | undefined {
+  if (toolCall.kind !== undefined && toolCall.kind !== "other") return undefined;
+  const hasStructuredLaunch = antigravitySubagentLaunches(toolCall.data.rawInput) !== undefined;
   if (
-    (toolCall.kind !== undefined && toolCall.kind !== "other") ||
-    toolCall.title === undefined ||
-    !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title)
-  )
+    !hasStructuredLaunch &&
+    (toolCall.title === undefined || !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title))
+  ) {
     return undefined;
+  }
   const update = Predicate.isObject(rawPayload) ? rawPayload.update : undefined;
   const meta = Predicate.isObject(update) ? update._meta : toolCall.data.meta;
   return Predicate.isObject(meta) && meta.is_mcp_tool_call === true ? "mcp" : "subagent";

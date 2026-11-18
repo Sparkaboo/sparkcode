@@ -139,6 +139,44 @@ describe("pending user input question progress", () => {
       isComplete: false,
       canAdvance: true,
     });
+
+    const withOptional = [
+      singleSelectQuestion,
+      {
+        id: "scope_other",
+        header: "Other",
+        question: "Optional free-form notes",
+        options: [],
+        multiSelect: false,
+        required: false,
+      },
+    ] as const;
+    expect(
+      derivePendingUserInputProgress(
+        withOptional,
+        { scope: { selectedOptionValues: ["Orchestration-first"] } },
+        1,
+      ),
+    ).toMatchObject({
+      questionIndex: 1,
+      resolvedAnswer: null,
+      isLastQuestion: true,
+      isComplete: true,
+      canAdvance: true,
+    });
+    expect(
+      derivePendingUserInputProgress(
+        withOptional,
+        {
+          scope: { selectedOptionValues: ["Orchestration-first"] },
+          scope_other: { attachmentsBlocked: true },
+        },
+        1,
+      ),
+    ).toMatchObject({
+      isComplete: false,
+      canAdvance: false,
+    });
   });
 });
 

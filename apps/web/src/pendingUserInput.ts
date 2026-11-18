@@ -137,6 +137,10 @@ export function derivePendingUserInputProgress<Q extends UserInputQuestion>(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: resolvedAnswer !== null,
+    canAdvance:
+      (activeQuestion !== null &&
+        activeQuestion.required === false &&
+        !activeDraft?.attachmentsBlocked) ||
+      resolvedAnswer !== null,
   };
 }

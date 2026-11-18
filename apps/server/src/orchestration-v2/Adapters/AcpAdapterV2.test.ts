@@ -24,6 +24,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  type RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2TurnItem,
@@ -10304,6 +10305,350 @@ describe("AcpAdapterV2", () => {
           carriedCompleted,
           "Direct Stop must not carry a stopped subagent into the follow-up run",
         );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect(
+    "streams reactive ACP v1 wake turns across permission requests and multi-step tool execution without flavor opt-in",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* bundledMockAgentPath;
+        const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
+          [];
+        type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
+        let requestPermission: Parameters<RuntimeService["handleRequestPermission"]>[0] | undefined;
+        let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
+        let nativeTurnActive = false;
+        const instanceId = ProviderInstanceId.make("acp-test-reactive-v1-wake");
+        const makeRuntime = makeMockRuntime({
+          childProcessSpawner,
+          mockAgentPath,
+          wrapRuntime: (runtime) => ({
+            ...runtime,
+            handleSessionUpdate: (handler) =>
+              Effect.sync(() => {
+                sessionUpdateHandler = handler;
+              }).pipe(Effect.andThen(runtime.handleSessionUpdate(handler))),
+            handleRequestPermission: (handler) =>
+              Effect.sync(() => {
+                requestPermission = handler;
+              }).pipe(Effect.andThen(runtime.handleRequestPermission(handler))),
+          }),
+        });
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            isNativeTurnActive: () => Effect.sync(() => nativeTurnActive),
+            makeRuntime: (input) =>
+              Effect.sync(() => {
+                runtimeInput = input;
+              }).pipe(Effect.andThen(makeRuntime(input))),
+          },
+          selfInvocation,
+          continuationRequests: {
+            offer: (request) =>
+              Effect.sync(() => {
+                continuationRequests.push(request);
+              }),
+          },
+        });
+        const threadId = ThreadId.make("thread-acp-reactive-v1-wake");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-reactive-v1-wake"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) => Queue.offer(events, event)),
+          Effect.forkScoped,
+        );
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+          }),
+        );
+        const firstProviderTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
+        });
+        let firstTerminalStatus: string | null = null;
+        while (firstTerminalStatus === null) {
+          const event = yield* Queue.take(events);
+          if (event.type === "turn.terminal" && event.providerTurnId === firstProviderTurnId) {
+            firstTerminalStatus = event.status;
+          }
+        }
+        assert.equal(firstTerminalStatus, "completed");
+        if (sessionUpdateHandler === undefined || requestPermission === undefined) {
+          return yield* Effect.die("ACP runtime must register update and permission handlers");
+        }
+
+        // Subagent finishes inside the ACP v1 agent and reactively wakes the root session.
+        nativeTurnActive = true;
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Reviewing subagent findings..." },
+          },
+        });
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "reactive-cmd-1",
+            title: "Run grep?",
+            kind: "execute",
+            status: "pending",
+            rawInput: { command: "grep -rn test apps/" },
+          },
+        });
+        const permissionOutcome = yield* requestPermission(
+          {
+            sessionId: "mock-session-1",
+            toolCall: { toolCallId: "reactive-cmd-1", title: "Run grep?", kind: "execute" },
+            options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+          },
+          { requestId: "reactive-perm-1", method: "session/request_permission" },
+        );
+        assert.deepEqual(permissionOutcome, {
+          outcome: { outcome: "selected", optionId: "allow-once" },
+        });
+        yield* runtimeInput!.onOutgoingResponse!("reactive-perm-1");
+        assert.lengthOf(continuationRequests, 1);
+
+        const continuationTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:2"),
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 2,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+            messageText: "Background task completed.",
+          }),
+        );
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "reactive-cmd-1",
+            status: "in_progress",
+          },
+        });
+
+        // Foreground command takes >3s; continuation turn must remain open.
+        yield* TestClock.adjust("5 seconds");
+        const drainAvailableEvents = Effect.gen(function* () {
+          const collected: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
+          let next = yield* Queue.poll(events);
+          while (Option.isSome(next)) {
+            collected.push(next.value);
+            next = yield* Queue.poll(events);
+          }
+          return collected;
+        });
+        const midToolEvents = yield* drainAvailableEvents;
+        assert.isFalse(
+          midToolEvents.some(
+            (event) =>
+              event.type === "turn.terminal" && event.providerTurnId === continuationTurnId,
+          ),
+          "continuation turn must not finalize while a foreground tool is running",
+        );
+
+        // Tool completes, then LLM takes 6s TTFT before emitting final reply.
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "reactive-cmd-1",
+            status: "completed",
+            rawOutput: "matched 3 lines",
+          },
+        });
+        yield* TestClock.adjust("6 seconds");
+        const midThinkingEvents = yield* drainAvailableEvents;
+        assert.isFalse(
+          midThinkingEvents.some(
+            (event) =>
+              event.type === "turn.terminal" && event.providerTurnId === continuationTurnId,
+          ),
+          "continuation turn must not split mid-loop while native trajectory is still active",
+        );
+
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Here are the C-end test cases." },
+          },
+        });
+        nativeTurnActive = false;
+        yield* TestClock.adjust("3 seconds");
+
+        let continuationTerminal: string | null = null;
+        let sawFinalReply = false;
+        for (const event of [
+          ...midToolEvents,
+          ...midThinkingEvents,
+          ...(yield* drainAvailableEvents),
+        ]) {
+          if (
+            event.type === "message.updated" &&
+            event.message.role === "assistant" &&
+            event.message.text.includes("Here are the C-end test cases.")
+          ) {
+            sawFinalReply = true;
+          }
+          if (event.type === "turn.terminal" && event.providerTurnId === continuationTurnId) {
+            continuationTerminal = event.status;
+          }
+        }
+        while (continuationTerminal === null) {
+          const event = yield* Queue.take(events);
+          if (
+            event.type === "message.updated" &&
+            event.message.role === "assistant" &&
+            event.message.text.includes("Here are the C-end test cases.")
+          ) {
+            sawFinalReply = true;
+          }
+          if (event.type === "turn.terminal" && event.providerTurnId === continuationTurnId) {
+            continuationTerminal = event.status;
+          }
+        }
+        assert.equal(continuationTerminal, "completed");
+        assert.isTrue(sawFinalReply);
+
+        // Second reactive wake in approval-required mode: permission request arrives before attach,
+        // offers a continuation, waits for attach, surfaces approval card, and settles after answer.
+        const supervisedPolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy: supervisedPolicy,
+        });
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "reactive-cmd-2",
+            title: "Run cleanup?",
+            kind: "execute",
+            status: "pending",
+            rawInput: { command: "git status" },
+          },
+        });
+        const askPermissionFiber = yield* requestPermission(
+          {
+            sessionId: "mock-session-1",
+            toolCall: { toolCallId: "reactive-cmd-2", title: "Run cleanup?", kind: "execute" },
+            options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+          },
+          { requestId: "reactive-perm-2", method: "session/request_permission" },
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+        assert.lengthOf(continuationRequests, 2);
+
+        const secondContinuationTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:3"),
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy: supervisedPolicy,
+            now: yield* DateTime.now,
+            ordinal: 3,
+            messageCreatedBy: "agent",
+            messageCreationSource: "provider",
+            messageText: "Background task completed.",
+          }),
+        );
+
+        let pendingRequestId: RuntimeRequestId | null = null;
+        while (pendingRequestId === null) {
+          const event = yield* Queue.take(events);
+          if (
+            event.type === "runtime_request.updated" &&
+            event.runtimeRequest.status === "pending" &&
+            event.runtimeRequest.providerTurnId === secondContinuationTurnId
+          ) {
+            pendingRequestId = event.runtimeRequest.id;
+          }
+        }
+        const respondFiber = yield* runtime
+          .respondToRuntimeRequest({ requestId: pendingRequestId, decision: "accept" })
+          .pipe(Effect.forkScoped);
+        assert.deepEqual(yield* Fiber.join(askPermissionFiber), {
+          outcome: { outcome: "selected", optionId: "allow-once" },
+        });
+        yield* runtimeInput!.onOutgoingResponse!("reactive-perm-2");
+        yield* Fiber.join(respondFiber);
+
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "reactive-cmd-2",
+            status: "completed",
+            rawOutput: "clean",
+          },
+        });
+        yield* sessionUpdateHandler({
+          sessionId: "mock-session-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Cleanup verified." },
+          },
+        });
+        yield* TestClock.adjust("3 seconds");
+
+        let secondContinuationTerminal: string | null = null;
+        while (secondContinuationTerminal === null) {
+          const event = yield* Queue.take(events);
+          if (event.type === "turn.terminal" && event.providerTurnId === secondContinuationTurnId) {
+            secondContinuationTerminal = event.status;
+          }
+        }
+        assert.equal(secondContinuationTerminal, "completed");
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });

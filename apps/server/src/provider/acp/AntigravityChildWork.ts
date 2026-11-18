@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- node:sqlite reads the native session database read-only.
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
 
@@ -14,9 +15,17 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import { antigravityManagedPath, antigravityProfileRoot } from "./AntigravityProfilePaths.ts";
-import { boundAntigravityToolText, isCutAntigravityToolText } from "./AntigravityProtocol.ts";
+import {
+  type AntigravityChildLaunch,
+  antigravitySubagentLaunches,
+  boundAntigravityToolText,
+  isCutAntigravityToolText,
+} from "./AntigravityProtocol.ts";
+
+export { type AntigravityChildLaunch, antigravitySubagentLaunches };
 
 // Field numbers from the runtime's trajectory protos (exa.cortex_pb).
+const ERROR_STEP_TYPE = 17;
 const STEP_METADATA = 5;
 const METADATA_TOOL_CALL = 4;
 const STEP_PLANNER_RESPONSE = 20;
@@ -32,34 +41,13 @@ const MAX_INVOKE_ROWS = 200;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const MAX_CHILDREN = 16;
 const TRANSCRIPT_BYTE_CAP = 256 * 1024;
+const ACTIVITY_TRANSCRIPT_BYTE_CAP = 64 * 1024;
 const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
 const STEP_TEXT_CAP = 4_000;
 const TOOL_INPUT_CAP = 1_000;
 
 /** T3's title for a batch whose launch text it never saw. */
 export const ANTIGRAVITY_SUBAGENT_BATCH_TITLE = "Antigravity subagent batch";
-
-interface AntigravityChildLaunch {
-  readonly role: string;
-  readonly prompt: string;
-}
-
-const decodeLaunchInput = Schema.decodeUnknownOption(
-  Schema.Struct({
-    Subagents: Schema.NonEmptyArray(Schema.Struct({ Role: Schema.String, Prompt: Schema.String })),
-  }),
-);
-
-/** `invoke_subagent` arguments, from the permission prompt or the persisted record. */
-export function antigravitySubagentLaunches(
-  input: unknown,
-): ReadonlyArray<AntigravityChildLaunch> | undefined {
-  return Option.getOrUndefined(
-    Option.map(decodeLaunchInput(input), (decoded) =>
-      decoded.Subagents.map((entry) => ({ role: entry.Role, prompt: entry.Prompt })),
-    ),
-  );
-}
 
 /** Batch title and prompt; reads match permission-prompt tool call ids against this exact text. */
 export function describeAntigravitySubagentLaunches(
@@ -359,6 +347,27 @@ function transcriptSteps(
   );
 }
 
+async function readTranscriptTailText(expected: string, byteCap: number) {
+  const handle = await NodeFSP.open(
+    expected,
+    NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) return undefined;
+    const length = Math.min(stat.size, byteCap);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
+    const truncated = stat.size > length;
+    let contents = buffer.subarray(0, bytesRead).toString("utf8");
+    // A tail read starts mid-line.
+    if (truncated) contents = contents.slice(contents.indexOf("\n") + 1);
+    return { contents, truncated };
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Reads the tail of the transcript at the named child's own unlinked profile path. */
 async function readChildTranscript(
   profileRoot: string,
@@ -388,24 +397,105 @@ async function readChildTranscript(
     return undefined;
   }
   if ((await NodeFSP.realpath(named).catch(() => undefined)) !== expected) return undefined;
-  const handle = await NodeFSP.open(
-    expected,
-    NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
-  );
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) return undefined;
-    const length = Math.min(stat.size, byteCap);
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buffer, 0, length, stat.size - length);
-    const truncated = stat.size > length;
-    let contents = buffer.subarray(0, bytesRead).toString("utf8");
-    // A tail read starts mid-line.
-    if (truncated) contents = contents.slice(contents.indexOf("\n") + 1);
-    return { steps: transcriptSteps(contents, prompt), truncated };
-  } finally {
-    await handle.close();
+  const tail = await readTranscriptTailText(expected, byteCap);
+  if (tail === undefined) return undefined;
+  return { steps: transcriptSteps(tail.contents, prompt), truncated: tail.truncated };
+}
+
+type DecodedTranscriptLine = Schema.Schema.Type<typeof TranscriptLine>;
+
+const isTerminalPlannerStep = (step: DecodedTranscriptLine): boolean =>
+  step.type === "PLANNER_RESPONSE" &&
+  step.status !== undefined &&
+  step.status !== "RUNNING" &&
+  (step.tool_calls?.length ?? 0) === 0;
+
+function lastDecodedTranscriptStep(contents: string): DecodedTranscriptLine | undefined {
+  const lines = contents.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line === undefined || line.trim().length === 0) continue;
+    const decoded = decodeTranscriptLine(line);
+    if (Option.isSome(decoded)) return decoded.value;
   }
+  return undefined;
+}
+
+async function readLastSessionStepType(
+  profileRoot: string,
+  conversationId: string,
+): Promise<number | undefined> {
+  const databasePath = (
+    await antigravityManagedPath(
+      profileRoot,
+      ["antigravity-acp", "conversations", `${conversationId}.db`],
+      "file",
+    )
+  )?.path;
+  if (databasePath === undefined) return undefined;
+  const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    database.exec("PRAGMA busy_timeout = 100");
+    const hasSteps =
+      database
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'steps'")
+        .get() !== undefined;
+    if (!hasSteps) return undefined;
+    const row = database
+      .prepare("SELECT step_type AS type FROM steps ORDER BY idx DESC LIMIT 1")
+      .get();
+    return typeof row?.type === "number" ? row.type : undefined;
+  } finally {
+    database.close();
+  }
+}
+
+async function isChildTrajectoryActive(
+  profileRoot: string,
+  brainRoot: string,
+  child: InvokeRecord["children"][number],
+): Promise<boolean> {
+  let named: string;
+  try {
+    named = NodePath.resolve(NodeURL.fileURLToPath(child.logUri));
+  } catch {
+    return false;
+  }
+  const childSegments = [child.conversationId, ".system_generated", "logs", "transcript.jsonl"];
+  const expectedLiteral = NodePath.join(brainRoot, ...childSegments);
+  if (named !== expectedLiteral) return false;
+
+  const lastStepType = await readLastSessionStepType(profileRoot, child.conversationId).catch(
+    () => undefined,
+  );
+  if (lastStepType === ERROR_STEP_TYPE) return false;
+
+  const managedTranscript = await antigravityManagedPath(
+    profileRoot,
+    ["antigravity-acp", "brain", ...childSegments],
+    "file",
+  );
+  if (managedTranscript === undefined) {
+    // Reject symlinks or foreign entries; only a not-yet-written path under an unlinked child dir is active.
+    let current = brainRoot;
+    for (const segment of childSegments) {
+      current = NodePath.join(current, segment);
+      const stat = await NodeFSP.lstat(current).catch((error: NodeJS.ErrnoException) =>
+        error?.code === "ENOENT" ? "missing" : undefined,
+      );
+      if (stat === "missing") return true;
+      if (stat === undefined || stat.isSymbolicLink()) return false;
+    }
+    return false;
+  }
+
+  const tail = await readTranscriptTailText(
+    managedTranscript.path,
+    ACTIVITY_TRANSCRIPT_BYTE_CAP,
+  ).catch(() => undefined);
+  if (tail === undefined) return false;
+  const lastStep = lastDecodedTranscriptStep(tail.contents);
+  return lastStep === undefined ? true : !isTerminalPlannerStep(lastStep);
 }
 
 class AntigravityChildWorkReadError extends Schema.TaggedError<AntigravityChildWorkReadError>()(
@@ -472,6 +562,106 @@ export const readAntigravityChildWork = Effect.fn("readAntigravityChildWork")(fu
           };
         }),
       );
+    },
+    catch: (cause) => new AntigravityChildWorkReadError({ cause }),
+  });
+});
+
+/** True while a native trajectory is mid-turn (awaiting tool results or the next planner step). */
+export const isAntigravitySessionTurnActive = Effect.fn("isAntigravitySessionTurnActive")(
+  function* (profileDirectory: string, sessionId: string) {
+    if (!NATIVE_ID.test(sessionId)) return false;
+    return yield* Effect.tryPromise({
+      try: async (): Promise<boolean> => {
+        const profileRoot = await antigravityProfileRoot(profileDirectory);
+        if (profileRoot === undefined) return false;
+        const lastStepType = await readLastSessionStepType(profileRoot, sessionId).catch(
+          () => undefined,
+        );
+        if (lastStepType === ERROR_STEP_TYPE) return false;
+        const managedTranscript = await antigravityManagedPath(
+          profileRoot,
+          ["antigravity-acp", "brain", sessionId, ".system_generated", "logs", "transcript.jsonl"],
+          "file",
+        );
+        if (managedTranscript === undefined) return false;
+        const tail = await readTranscriptTailText(
+          managedTranscript.path,
+          ACTIVITY_TRANSCRIPT_BYTE_CAP,
+        ).catch(() => undefined);
+        if (tail === undefined) return false;
+        const lastStep = lastDecodedTranscriptStep(tail.contents);
+        return lastStep === undefined ? false : !isTerminalPlannerStep(lastStep);
+      },
+      catch: (cause) => new AntigravityChildWorkReadError({ cause }),
+    });
+  },
+);
+
+/** True while any subagent recorded in the parent's trajectory has not yet reached a terminal step. */
+export const hasActiveAntigravityChildWork = Effect.fn("hasActiveAntigravityChildWork")(function* (
+  profileDirectory: string,
+  rootSessionId: string,
+) {
+  if (!NATIVE_ID.test(rootSessionId)) return false;
+  return yield* Effect.tryPromise({
+    try: async (): Promise<boolean> => {
+      const profileRoot = await antigravityProfileRoot(profileDirectory);
+      if (profileRoot === undefined) return false;
+      const databasePath = (
+        await antigravityManagedPath(
+          profileRoot,
+          ["antigravity-acp", "conversations", `${rootSessionId}.db`],
+          "file",
+        )
+      )?.path;
+      const brainDir = await antigravityManagedPath(
+        profileRoot,
+        ["antigravity-acp", "brain"],
+        "directory",
+      );
+      if (databasePath === undefined || brainDir === undefined) return false;
+      const children = new Map<string, InvokeRecord["children"][number]>();
+      const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+      try {
+        database.exec("PRAGMA busy_timeout = 100");
+        const hasSteps =
+          database
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'steps'")
+            .get() !== undefined;
+        if (!hasSteps) return false;
+        let rows = 0;
+        let bytes = 0;
+        for (const row of database
+          .prepare(
+            "SELECT length(step_payload) AS size, CASE WHEN length(step_payload) <= ? THEN step_payload END AS step_payload FROM steps WHERE step_type = ? AND step_format = 0 ORDER BY idx DESC",
+          )
+          .iterate(MAX_STEP_BYTES, INVOKE_SUBAGENT_STEP_TYPE)) {
+          const size =
+            row !== null && typeof row === "object" && "size" in row ? Number(row.size) : 0;
+          rows += 1;
+          bytes += size;
+          if (rows > MAX_INVOKE_ROWS || size > MAX_STEP_BYTES || bytes > MAX_SCAN_BYTES) break;
+          const payload = payloadOf(row);
+          const record = payload === undefined ? undefined : decodeInvokeRecord(payload);
+          if (record === undefined) continue;
+          const completed = complete(record);
+          if (completed === undefined) continue;
+          for (const child of completed.children) {
+            if (!children.has(child.conversationId)) {
+              children.set(child.conversationId, child);
+            }
+          }
+        }
+      } finally {
+        database.close();
+      }
+      for (const child of children.values()) {
+        if (await isChildTrajectoryActive(profileRoot, brainDir.path, child)) {
+          return true;
+        }
+      }
+      return false;
     },
     catch: (cause) => new AntigravityChildWorkReadError({ cause }),
   });

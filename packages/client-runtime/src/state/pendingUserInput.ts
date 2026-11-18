@@ -5,6 +5,7 @@ export interface PendingUserInputQuestion {
   readonly multiSelect?: boolean | undefined;
   readonly allowCustomAnswer?: boolean | undefined;
   readonly initialAnswer?: string | undefined;
+  readonly required?: boolean | undefined;
 }
 
 export interface PendingUserInputDraftAnswer {
@@ -165,8 +166,15 @@ export function buildPendingUserInputAnswers(
   const entries: Array<[string, PendingUserInputAnswer]> = [];
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    if (draft?.attachmentsBlocked) {
+      return null;
+    }
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (answer === null) {
+      if (question.required === false) {
+        continue;
+      }
       return null;
     }
     entries.push([question.id, answer]);

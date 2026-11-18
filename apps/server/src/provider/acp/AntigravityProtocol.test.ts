@@ -54,6 +54,27 @@ describe("native Antigravity subagent tools", () => {
         {},
       ),
     ).toBeUndefined();
+    const singleLaunch = {
+      toolCallId: "trajectory:9",
+      title: "Run invoke_subagent",
+      kind: "other",
+      data: {
+        rawInput: {
+          TypeName: "research",
+          Role: "Standards Code Reviewer",
+          Prompt: "Review the diff",
+        },
+      },
+    };
+    expect(classifyAntigravitySubagentToolCall(singleLaunch, {})).toBe("subagent");
+    expect(
+      classifyAntigravitySubagentToolCall(singleLaunch, {
+        update: { _meta: { is_mcp_tool_call: true } },
+      }),
+    ).toBe("mcp");
+    expect(
+      classifyAntigravitySubagentToolCall({ ...singleLaunch, kind: "execute" }, {}),
+    ).toBeUndefined();
   });
 
   it("recognizes history starts and bounds the launch output", () => {

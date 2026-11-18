@@ -11,6 +11,8 @@ import {
   ANTIGRAVITY_SUBAGENT_BATCH_TITLE,
   antigravitySubagentLaunches,
   describeAntigravitySubagentLaunches,
+  hasActiveAntigravityChildWork,
+  isAntigravitySessionTurnActive,
   readAntigravityChildWork,
 } from "./AntigravityChildWork.ts";
 import { sanitizeAntigravityToolPayload } from "./AntigravityProtocol.ts";
@@ -142,6 +144,14 @@ it.layer(NodeServices.layer)("readAntigravityChildWork", (it) => {
       );
       const longMatch = yield* read(profile, opaque, describeAntigravitySubagentLaunches(stored!));
       expect(longMatch.map((child) => child.prompt)).toEqual([long.prompt]);
+      const singleStored = antigravitySubagentLaunches(
+        sanitizeAntigravityToolPayload({
+          TypeName: "research",
+          Role: LAUNCH.role,
+          Prompt: LAUNCH.prompt,
+        }),
+      );
+      expect(singleStored).toEqual([{ role: LAUNCH.role, prompt: LAUNCH.prompt }]);
       expect(
         yield* read(profile, opaque, describeAntigravitySubagentLaunches([marked])),
       ).toHaveLength(1);
@@ -339,6 +349,32 @@ it.layer(NodeServices.layer)("readAntigravityChildWork", (it) => {
       expect(children).toHaveLength(16);
       expect(children.every((child) => child.truncated)).toBe(true);
       expect(JSON.stringify(children).length).toBeLessThan(600 * 1024);
+    }),
+  );
+
+  it.effect("tracks active child and session trajectories from terminal planner steps", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const inProgressLines = [
+        transcriptLines[0],
+        transcriptLines[1],
+        { step_index: 2, type: "GENERIC", status: "ERROR", content: "command exited 1" },
+      ];
+      const { profile, transcriptPath } = yield* makeProfile({
+        steps: autoApproved,
+        transcript: inProgressLines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+      });
+      // A failed tool step is followed by another planner step, so the child is still active.
+      expect(yield* hasActiveAntigravityChildWork(profile, ROOT)).toBe(true);
+      expect(yield* isAntigravitySessionTurnActive(profile, CHILD)).toBe(true);
+
+      // Once the final PLANNER_RESPONSE finishes with zero tool calls, the trajectory is idle.
+      yield* fs.writeFileString(
+        transcriptPath,
+        transcriptLines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+      );
+      expect(yield* hasActiveAntigravityChildWork(profile, ROOT)).toBe(false);
+      expect(yield* isAntigravitySessionTurnActive(profile, CHILD)).toBe(false);
     }),
   );
 });

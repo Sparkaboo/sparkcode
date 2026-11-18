@@ -94,6 +94,23 @@ describe("AntigravityAdapterV2 flavor", () => {
     });
     assert.equal(launch?.title, "Readme Reader");
     assert.equal(launch?.prompt, "Read README.md");
+
+    const single = flavor.extractSubagentUpdate?.({
+      toolCallId: "30a76314-b57d-4b65-be31-04528d2fb5c5:1089",
+      title: "Run invoke_subagent",
+      kind: "other",
+      status: "completed",
+      data: {
+        rawInput: {
+          TypeName: "research",
+          Role: "Standards Code Reviewer",
+          Prompt: "Review the diff against standards",
+        },
+      },
+    });
+    assert.equal(single?.status, "running");
+    assert.equal(single?.title, "Standards Code Reviewer");
+    assert.equal(single?.prompt, "Review the diff against standards");
   });
 
   it("routes interaction_* permission requests to the question card", () => {

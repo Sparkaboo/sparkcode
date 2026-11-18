@@ -176,6 +176,37 @@ describe("buildPendingUserInputAnswers", () => {
       scope: "Orchestration-first",
       compat: "Keep the current envelope for one release window",
     });
+
+    const optionalNotes = {
+      id: "notes",
+      header: "Other",
+      question: "Optional free-form notes",
+      options: [],
+      multiSelect: false,
+      required: false,
+    } as const;
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, optionalNotes], {
+        scope: { selectedOptionValues: ["Orchestration-first"] },
+      }),
+    ).toEqual({
+      scope: "Orchestration-first",
+    });
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, optionalNotes], {
+        scope: { selectedOptionValues: ["Orchestration-first"] },
+        notes: { customAnswer: "Keep backward compatibility" },
+      }),
+    ).toEqual({
+      scope: "Orchestration-first",
+      notes: "Keep backward compatibility",
+    });
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, optionalNotes], {
+        scope: { selectedOptionValues: ["Orchestration-first"] },
+        notes: { attachmentsBlocked: true },
+      }),
+    ).toBeNull();
   });
 });
 

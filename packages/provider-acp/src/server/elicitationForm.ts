@@ -135,6 +135,47 @@ function optionValue(option: Option): string {
   return option.value ?? option.label;
 }
 
+function isNamespacedSubfieldKey(parentId: string, candidateId: string): boolean {
+  if (candidateId.length <= parentId.length + 1) return false;
+  if (!candidateId.startsWith(parentId) || candidateId[parentId.length] !== "_") return false;
+  let index = parentId.length;
+  while (index < candidateId.length && candidateId[index] === "_") {
+    index += 1;
+  }
+  return index < candidateId.length;
+}
+
+function projectFieldPrompt(input: {
+  readonly title: string | undefined;
+  readonly description: string | undefined;
+  readonly fallbackHeader: string;
+  readonly formMessage: string;
+}): { readonly header: string; readonly question: string } {
+  if (input.title !== undefined && input.description !== undefined) {
+    return { header: input.title, question: input.description };
+  }
+  return {
+    header: input.fallbackHeader,
+    question: input.title ?? input.description ?? input.formMessage,
+  };
+}
+
+function splitSelectedChoiceWithSupplement(
+  values: ReadonlySet<string>,
+  answer: string,
+): { readonly choice: string; readonly supplement: string } | undefined {
+  for (const candidate of values) {
+    const prefix = `${candidate}\n\n`;
+    if (answer.startsWith(prefix)) {
+      const supplement = answer.slice(prefix.length);
+      if (supplement.trim().length > 0) {
+        return { choice: candidate, supplement };
+      }
+    }
+  }
+  return undefined;
+}
+
 function typedAnswer(
   field: Field,
   answer: unknown,
@@ -201,19 +242,42 @@ export function parseElicitationForm(
     fields.set(id, parsed.field);
     parsedFields.push({ id, property, options: parsed.options });
   }
-  // An optional `<id>__other` text field (OMP's ask dialog) is the free-text answer to
-  // optional single choice `<id>`: ask them as one question and send custom text to the
-  // companion. Multi-select keeps both fields, since it can answer with options and text.
+  // Flat JSON Schema forms encode a choice's free-form fallback as a single optional `<id>_*`
+  // text subfield. Single-select folds both into one question; multi-select keeps both fields
+  // and marks the companion optional so selections and free text can be answered independently.
+  const childIdsByOwner = new Map<string, string[]>();
+  for (const candidateId of fields.keys()) {
+    let closestOwner: string | undefined;
+    for (const potentialOwner of fields.keys()) {
+      if (potentialOwner === candidateId) continue;
+      if (!isNamespacedSubfieldKey(potentialOwner, candidateId)) continue;
+      if (closestOwner === undefined || potentialOwner.length > closestOwner.length) {
+        closestOwner = potentialOwner;
+      }
+    }
+    if (closestOwner !== undefined) {
+      const existing = childIdsByOwner.get(closestOwner) ?? [];
+      existing.push(candidateId);
+      childIdsByOwner.set(closestOwner, existing);
+    }
+  }
   const companions = new Map<string, string>();
+  const optionalCompanionIds = new Set<string>();
   for (const [id, field] of fields) {
-    const companionId = `${id}__other`;
+    const children = childIdsByOwner.get(id);
+    const companionId = children?.length === 1 ? children[0] : undefined;
     if (
-      field.kind === "choice" &&
-      fields.get(companionId)?.kind === "text" &&
-      !required.has(id) &&
-      !required.has(companionId)
+      companionId === undefined ||
+      fields.get(companionId)?.kind !== "text" ||
+      required.has(id) ||
+      required.has(companionId)
     ) {
+      continue;
+    }
+    if (field.kind === "choice") {
       companions.set(id, companionId);
+    } else if (field.kind === "multiChoice") {
+      optionalCompanionIds.add(companionId);
     }
   }
   const folded = new Set(companions.values());
@@ -221,15 +285,24 @@ export function parseElicitationForm(
   for (const { id, property, options } of parsedFields) {
     if (folded.has(id)) continue;
     const kind = fields.get(id)?.kind;
+    const prompt = projectFieldPrompt({
+      title: text(property.title),
+      description: text(property.description),
+      fallbackHeader: `Question ${questions.length + 1}`,
+      formMessage: message,
+    });
+    const isOptionalField =
+      optionalCompanionIds.has(id) || (required.size > 0 && !required.has(id));
     questions.push({
       id,
-      header: text(property.title) ?? `Question ${questions.length + 1}`,
-      question: text(property.description) ?? message,
+      header: prompt.header,
+      question: prompt.question,
       options,
       ...(kind === "text" || kind === "number" || companions.has(id)
         ? {}
         : { allowCustomAnswer: false }),
       ...(kind === "multiChoice" ? { multiSelect: true } : {}),
+      ...(isOptionalField ? { required: false } : {}),
     });
   }
   return {
@@ -242,8 +315,16 @@ export function parseElicitationForm(
         const typed = answer === undefined ? undefined : typedAnswer(field, answer);
         const companionId = companions.get(id);
         if (typed !== undefined) entries.push([id, typed]);
-        else if (companionId !== undefined && typeof answer === "string") {
-          entries.push([companionId, answer]);
+        else if (companionId !== undefined && typeof answer === "string" && answer.trim() !== "") {
+          const split =
+            field.kind === "choice"
+              ? splitSelectedChoiceWithSupplement(field.values, answer)
+              : undefined;
+          if (split !== undefined) {
+            entries.push([id, split.choice], [companionId, split.supplement]);
+          } else {
+            entries.push([companionId, answer]);
+          }
         } else if (required.has(id)) return undefined;
       }
       // Own properties for every field, `__proto__` included; assigning to

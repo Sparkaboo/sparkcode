@@ -26,7 +26,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
   const { selectedThreadCwd } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
-  const { canChangeThreadBranch } = gitActions;
+  const { canChangeThreadBranch, canOperateThread } = gitActions;
 
   const gitStatus = useEnvironmentQuery(
     selectedThread !== null && selectedThreadCwd !== null
@@ -87,6 +87,22 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
           }}
         />
       </FormSection>
+
+      {selectedThread?.worktreePath ? (
+        <FormSection title="Current worktree">
+          <SheetActionButton
+            icon="folder"
+            label="Return to local checkout"
+            disabled={!canOperateThread || busy}
+            onPress={() => {
+              void gitActions.onDetachSelectedThreadWorktree().then((result) => {
+                if (result === null) return;
+                navigation.goBack();
+              });
+            }}
+          />
+        </FormSection>
+      ) : null}
 
       <FormSection title="New worktree">
         <FormField

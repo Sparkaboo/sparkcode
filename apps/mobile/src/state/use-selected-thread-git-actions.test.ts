@@ -45,8 +45,8 @@ vi.mock("./use-thread-selection", () => ({
 }));
 vi.mock("./use-selected-thread-worktree", () => ({
   useSelectedThreadWorktree: () => ({
-    selectedThreadCwd: "/repo",
-    selectedThreadWorktreePath: null,
+    selectedThreadCwd: state.thread.worktreePath ?? "/repo",
+    selectedThreadWorktreePath: state.thread.worktreePath,
   }),
 }));
 vi.mock("./queries", () => ({
@@ -157,6 +157,21 @@ describe("thread Git mutation permissions", () => {
       expect(state.worktrees).toEqual(canOperate ? ["/repo-worktree"] : []);
       expect(state.thread.worktreePath).toBe(canOperate ? "/repo-worktree" : null);
       expect(state.thread.branch).toBe(canOperate ? "feature/task" : "main");
+    },
+  );
+
+  it.each([false, true])(
+    "requires task permission before detaching a thread worktree: %s",
+    async (canOperate) => {
+      state.scopes = canOperate ? new Set([AuthOrchestrationOperateScope]) : new Set();
+      state.branch = "main";
+      state.thread.branch = "feature/task";
+      state.thread.worktreePath = "/repo-worktree";
+      const actions = useSelectedThreadGitActions();
+      const result = await actions.onDetachSelectedThreadWorktree();
+      expect(result).toBe(canOperate ? true : null);
+      expect(state.thread.worktreePath).toBe(canOperate ? null : "/repo-worktree");
+      expect(state.thread.branch).toBe(canOperate ? "main" : "feature/task");
     },
   );
 

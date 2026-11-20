@@ -24,6 +24,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
   type RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ProviderThread,
@@ -6104,6 +6105,63 @@ describe("AcpAdapterV2", () => {
       assert.isTrue(Option.isSome(closed));
       assert.isTrue(runtimeClosed);
     }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "treats interruptTurn after sessionScope closes as settled without leaking interruption",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* bundledMockAgentPath;
+        const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath });
+        const instanceId = ProviderInstanceId.make("acp-test");
+        const threadId = ThreadId.make("thread-acp-interrupt-after-close");
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            makeRuntime,
+          },
+          selfInvocation,
+        });
+        const sessionScope = yield* Scope.make();
+        const runtime = yield* adapter
+          .openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("provider-session-acp-interrupt-after-close"),
+            modelSelection,
+            runtimePolicy,
+          })
+          .pipe(Effect.provideService(Scope.Scope, sessionScope));
+
+        assert.isTrue(runtime.backgroundTasksEndWithProcess);
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* Scope.close(sessionScope, Exit.void);
+
+        const interruptExit = yield* Effect.exit(
+          runtime.interruptTurn({
+            providerThread,
+            providerTurnId: ProviderTurnId.make("provider-turn:after-close"),
+            requestRuntimeRestart: true,
+          }),
+        );
+        assert.isTrue(
+          Exit.isSuccess(interruptExit),
+          `expected interruptTurn after scope close to succeed, got: ${Exit.isFailure(interruptExit) ? Cause.pretty(interruptExit.cause) : "success"}`,
+        );
+      }).pipe(Effect.provide(layerTest)),
   );
 
   // Oracle: Grok incident frames. Command completion must release the turn even

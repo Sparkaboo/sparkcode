@@ -74,6 +74,30 @@ export const WorktreeMcpHandoffResult = Schema.Struct({
 });
 export type WorktreeMcpHandoffResult = typeof WorktreeMcpHandoffResult.Type;
 
+export const WorktreeMcpDetachInput = Schema.Struct({
+  removeWorktree: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "True: delete a clean managed worktree folder. Default false.",
+    }),
+  ),
+  continuationPrompt: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
+      description: "Work to resume in the project root next turn. Omitted: thread waits.",
+    }),
+  ),
+});
+export type WorktreeMcpDetachInput = typeof WorktreeMcpDetachInput.Type;
+
+export const WorktreeMcpDetachResult = Schema.Struct({
+  previousWorktreePath: TrimmedNonEmptyString,
+  projectWorkspaceRoot: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  removedWorktree: Schema.Boolean,
+  continuation: WorktreeMcpContinuationStatus,
+  note: Schema.String,
+});
+export type WorktreeMcpDetachResult = typeof WorktreeMcpDetachResult.Type;
+
 export const WorktreeMcpStatusResult = Schema.Struct({
   attached: Schema.Boolean,
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
@@ -93,6 +117,7 @@ export class WorktreeMcpFailure extends Schema.TaggedError<WorktreeMcpFailure>()
       "thread_not_found",
       "project_not_found",
       "already_in_worktree",
+      "not_in_worktree",
       "handoff_in_progress",
       "invalid_request",
       "operation_failed",

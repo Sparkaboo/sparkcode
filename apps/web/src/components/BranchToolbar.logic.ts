@@ -248,10 +248,20 @@ export function resolveLocalCheckoutBranchMismatch(input: {
   return { threadBranch: activeThreadBranch, currentBranch: currentGitBranch };
 }
 
+export function resolveBranchListCwd(input: {
+  activeWorktreePath: string | null;
+  activeProjectCwd: string | null;
+  worktreeUnavailable: boolean;
+}): string | null {
+  if (input.activeWorktreePath === null) return input.activeProjectCwd;
+  return input.worktreeUnavailable ? input.activeProjectCwd : input.activeWorktreePath;
+}
+
 export function resolveBranchSelectionTarget(input: {
   activeProjectCwd: string;
   activeProjectCheckoutRoot?: string | undefined;
   activeWorktreePath: string | null;
+  worktreeUnavailable?: boolean;
   refName: Pick<VcsRef, "isDefault" | "worktreePath">;
 }): {
   checkoutCwd: string;
@@ -274,7 +284,9 @@ export function resolveBranchSelectionTarget(input: {
   }
 
   const nextWorktreePath =
-    activeWorktreePath !== null && refName.isDefault ? null : activeWorktreePath;
+    input.worktreeUnavailable === true || (activeWorktreePath !== null && refName.isDefault)
+      ? null
+      : activeWorktreePath;
 
   return {
     checkoutCwd: nextWorktreePath ?? activeProjectCwd,
@@ -299,11 +311,20 @@ export function shouldIncludeBranchPickerItem(input: {
   normalizedQuery: string;
   createBranchItemValue: string | null;
   checkoutPullRequestItemValue: string | null;
+  detachWorktreeItemValue?: string | null;
 }): boolean {
   const { itemValue, normalizedQuery, createBranchItemValue, checkoutPullRequestItemValue } = input;
 
   if (normalizedQuery.length === 0) {
     return true;
+  }
+
+  if (input.detachWorktreeItemValue && itemValue === input.detachWorktreeItemValue) {
+    return (
+      "return to local checkout".includes(normalizedQuery) ||
+      "detach worktree".includes(normalizedQuery) ||
+      "project root".includes(normalizedQuery)
+    );
   }
 
   if (createBranchItemValue && itemValue === createBranchItemValue) {

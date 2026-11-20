@@ -161,6 +161,14 @@ function startWithMissingWorktree(
           pruneWorktrees,
           createWorktree,
           listLocalBranchNames,
+          listRefs: () =>
+            Effect.succeed({
+              refs: [],
+              isRepo: true,
+              hasPrimaryRemote: true,
+              nextCursor: null,
+              totalCount: 0,
+            }),
         }),
         Layer.mock(ProjectService.ProjectService)({
           getById: () =>
@@ -1093,6 +1101,14 @@ function makeLocalCommandHarness(input: {
           ? Layer.mock(GitWorkflow.GitWorkflowService)({
               pruneWorktrees: () => Effect.void,
               listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
+              listRefs: () =>
+                Effect.succeed({
+                  refs: [],
+                  isRepo: true,
+                  hasPrimaryRemote: true,
+                  nextCursor: null,
+                  totalCount: 0,
+                }),
               createWorktree,
             })
           : Layer.succeed(GitWorkflow.GitWorkflowService, input.gitWorkflow),
@@ -1388,6 +1404,64 @@ effectIt.effect(
       ]);
       expect(JSON.stringify(harness.events)).not.toContain("private git diagnostic");
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+effectIt.live(
+  "fails fast with the existing checkout path when a missing worktree branch is checked out elsewhere",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const gitWorkflow = yield* GitWorkflow.GitWorkflowService;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-recreate-checked-out-",
+      });
+      const workspaceRoot = path.join(root, "project");
+      const worktreesDir = path.join(root, "worktrees");
+      const worktreePath = path.join(worktreesDir, "project", "restore");
+      yield* fileSystem.makeDirectory(workspaceRoot);
+      const git = (cwd: string, args: ReadonlyArray<string>) =>
+        driver
+          .execute({ operation: "test.worktreeCheckedOutElsewhere", cwd, args })
+          .pipe(Effect.map((result) => result.stdout.trim()));
+      yield* git(workspaceRoot, ["init", "-b", "main"]);
+      yield* git(workspaceRoot, ["config", "user.name", "Test"]);
+      yield* git(workspaceRoot, ["config", "user.email", "test@example.com"]);
+      yield* git(workspaceRoot, ["commit", "--allow-empty", "-m", "base"]);
+      yield* git(workspaceRoot, ["worktree", "add", "-b", "feature/restore", worktreePath]);
+      // User removes the worktree and checks out the same branch in the main checkout.
+      yield* git(workspaceRoot, ["worktree", "remove", worktreePath]);
+      yield* git(workspaceRoot, ["checkout", "feature/restore"]);
+
+      const harness = makeLocalCommandHarness({
+        text: "Continue",
+        workspaceRoot,
+        worktreePath,
+        worktreesDir,
+        fileSystem,
+        gitWorkflow,
+        failReadsAfterRunning: true,
+      });
+      const realWorkspaceRoot = yield* fileSystem.realPath(workspaceRoot);
+
+      // Even with willRetry: true, a branch checked out elsewhere must settle immediately instead of retrying.
+      yield* harness.startWithRetry;
+
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.turnItems).toMatchObject([
+        {
+          type: "error",
+          title: "Couldn't recreate thread workspace",
+          failure: {
+            message: expect.stringContaining(`already checked out at ${realWorkspaceRoot}`),
+          },
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
 );
 
 effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>

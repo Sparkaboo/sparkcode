@@ -33,6 +33,15 @@ class WorktreeRecreateNoBaseError extends Schema.TaggedError<WorktreeRecreateNoB
   }
 }
 
+class WorktreeBranchCheckedOutElsewhereError extends Schema.TaggedError<WorktreeBranchCheckedOutElsewhereError>()(
+  "WorktreeBranchCheckedOutElsewhereError",
+  { worktreePath: Schema.String, branch: Schema.String, checkedOutAt: Schema.String },
+) {
+  override get message(): string {
+    return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}: branch '${this.branch}' is already checked out at ${this.checkedOutAt}. Switch this thread's workspace or switch branches there before retrying.`;
+  }
+}
+
 interface WorktreeThread {
   readonly id: ThreadId;
   readonly projectId: ProjectId;
@@ -82,6 +91,24 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     yield* gitWorkflow.pruneWorktrees({ cwd });
     const localBranchNames = yield* gitWorkflow.listLocalBranchNames(cwd);
     if (localBranchNames.includes(branch)) {
+      const checkedOutAt = yield* gitWorkflow
+        .listRefs({ cwd, query: branch, refKind: "local" })
+        .pipe(
+          Effect.map(
+            (result) =>
+              result.refs.find(
+                (ref) => ref.name === branch && ref.isRemote !== true && ref.worktreePath !== null,
+              )?.worktreePath ?? null,
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+      if (checkedOutAt !== null) {
+        return yield* new WorktreeBranchCheckedOutElsewhereError({
+          worktreePath,
+          branch,
+          checkedOutAt,
+        });
+      }
       yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
       return;
     }
@@ -129,7 +156,8 @@ export const makeRestoreMissingWorktree = Effect.gen(function* () {
     });
     yield* recreateMissingWorktree({ cwd: project.workspaceRoot, worktreePath, branch }).pipe(
       Effect.mapError((cause) =>
-        cause._tag === "WorktreeRecreateNoBaseError"
+        cause._tag === "WorktreeRecreateNoBaseError" ||
+        cause._tag === "WorktreeBranchCheckedOutElsewhereError"
           ? cause
           : new WorktreeRecreateError({ worktreePath, branch, cause }),
       ),

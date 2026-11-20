@@ -331,6 +331,54 @@ export function useSelectedThreadGitActions() {
     );
   };
 
+  const onDetachSelectedThreadWorktree = async (): Promise<boolean | null> => {
+    if (
+      !selectedThread ||
+      !selectedThreadProject ||
+      !selectedThreadWorktreePath ||
+      !readEnvironmentScope(selectedThread.environmentId, AuthOrchestrationOperateScope)
+    ) {
+      return null;
+    }
+    const projectCwd = selectedThreadProject.workspaceRoot;
+    const target = {
+      environmentId: selectedThread.environmentId,
+      cwd: projectCwd,
+    };
+    setPendingConnectionError(null);
+    const result = await vcsActionManager.track(
+      appAtomRegistry,
+      target,
+      { operation: "switch_ref", label: "Returning to local checkout" },
+      async () => {
+        const statusResult = await refreshStatus({
+          environmentId: selectedThread.environmentId,
+          input: { cwd: projectCwd },
+        });
+        const projectBranch = AsyncResult.isSuccess(statusResult)
+          ? (statusResult.value.refName ?? null)
+          : null;
+        return syncSelectedThreadBranchState({
+          thread: selectedThread,
+          cwd: projectCwd,
+          nextThreadState: {
+            branch: projectBranch,
+            worktreePath: null,
+          },
+        });
+      },
+    );
+    if (AsyncResult.isFailure(result)) {
+      const error = Cause.squash(result.cause);
+      const message =
+        error instanceof Error ? error.message : "Failed to return to local checkout.";
+      setPendingConnectionError(message);
+      showGitActionResult({ type: "error", title: "Git action failed", description: message });
+      return null;
+    }
+    return true;
+  };
+
   const onPullSelectedThreadBranch = async () => {
     await runSelectedThreadGitMutation(
       "pull",
@@ -405,12 +453,14 @@ export function useSelectedThreadGitActions() {
 
   return {
     canWriteSourceControl,
+    canOperateThread,
     canChangeThreadBranch,
     refreshSelectedThreadGitStatus,
     refreshSelectedThreadBranches,
     onCheckoutSelectedThreadBranch,
     onCreateSelectedThreadBranch,
     onCreateSelectedThreadWorktree,
+    onDetachSelectedThreadWorktree,
     onPullSelectedThreadBranch,
     onRunSelectedThreadGitAction,
   };

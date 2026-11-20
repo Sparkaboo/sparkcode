@@ -2797,6 +2797,82 @@ it.effect("keeps a Stop that commits while a workspace handoff completes the run
   }),
 );
 
+it.effect(
+  "completes the run when a workspace handoff releases a single-thread session stream",
+  () =>
+    Effect.gen(function* () {
+      const { written, finalEvents, committedEffects } = yield* captureRootRunTermination({
+        key: "stream-release-workspace-handoff",
+        shouldFinalizeRun: () => Effect.succeed(true),
+        hasWorkspaceMoved: () => Effect.succeed(true),
+        seedOpenSubagent: true,
+        events: () =>
+          Stream.fail(
+            new ProviderAdapter.ProviderAdapterEventStreamError({
+              driver,
+              providerSessionId: ProviderSessionId.make(
+                "provider-session:stream-release-workspace-handoff",
+              ),
+              cause: "Workspace changed.",
+            }),
+          ),
+      });
+      const statuses = (type: OrchestrationV2DomainEvent["type"]) =>
+        finalEvents.flatMap((event) =>
+          event.type === type ? [(event.payload as { readonly status: string }).status] : [],
+        );
+      assert.deepEqual(statuses("run.updated"), ["waiting"]);
+      assert.deepEqual(statuses("run-attempt.updated"), ["completed"]);
+      assert.deepEqual(statuses("subagent.updated"), ["interrupted"]);
+      assert.isFalse(
+        written.some((item) => item.type === "error" || item.type === "run_interrupt_result"),
+      );
+      assert.deepEqual(
+        committedEffects.map((effect) => effect.request.type),
+        ["checkpoint.capture"],
+      );
+    }),
+);
+
+it.effect("keeps a Stop that races a stream-release workspace handoff", () =>
+  Effect.gen(function* () {
+    const stopCommitted = yield* Ref.make(false);
+    const { written, finalEvents, committedEffects } = yield* captureRootRunTermination({
+      key: "stop-races-stream-release-handoff",
+      shouldFinalizeRun: () => Effect.succeed(true),
+      hasWorkspaceMoved: () => Ref.set(stopCommitted, true).pipe(Effect.as(true)),
+      beforeTerminalWrite: (request) =>
+        Ref.get(stopCommitted).pipe(
+          Effect.map((stopped) => !(stopped && request.unlessInterruptRequested !== undefined)),
+        ),
+      events: () =>
+        Stream.fail(
+          new ProviderAdapter.ProviderAdapterEventStreamError({
+            driver,
+            providerSessionId: ProviderSessionId.make(
+              "provider-session:stop-races-stream-release-handoff",
+            ),
+            cause: "Workspace changed.",
+          }),
+        ),
+    });
+    const statuses = (type: OrchestrationV2DomainEvent["type"]) =>
+      finalEvents.flatMap((event) =>
+        event.type === type ? [(event.payload as { readonly status: string }).status] : [],
+      );
+    assert.deepEqual(statuses("run.updated"), ["interrupted"]);
+    assert.deepEqual(statuses("run-attempt.updated"), ["interrupted"]);
+    assert.deepEqual(
+      written.map((item) => item.type),
+      ["run_interrupt_result"],
+    );
+    assert.deepEqual(
+      committedEffects.map((effect) => effect.request.type),
+      ["checkpoint.capture"],
+    );
+  }),
+);
+
 it.effect("does not overwrite Stop when ownership changes after the finalization read", () =>
   Effect.gen(function* () {
     const { written, observed, submittedEffects, committedEffects } =
@@ -3554,10 +3630,9 @@ function captureRootRunTermination(input: {
           driver,
           events: Stream.empty,
           subscribeEvents: Effect.succeed({
-            events:
-              input.events?.(ids) ??
-              Stream.fromIterable([
-                ...(input.seedOpenSubagent
+            events: (() => {
+              const seededSubagentEvents: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> =
+                input.seedOpenSubagent
                   ? [
                       { type: "subagent.updated", driver, subagent: runningSubagent } as const,
                       {
@@ -3577,9 +3652,14 @@ function captureRootRunTermination(input: {
                         }),
                       } as const,
                     ]
-                  : []),
-                rootTerminalEvent(ids, "interrupted"),
-              ] satisfies ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>),
+                  : [];
+              return input.events !== undefined
+                ? Stream.concat(Stream.fromIterable(seededSubagentEvents), input.events(ids))
+                : Stream.fromIterable([
+                    ...seededSubagentEvents,
+                    rootTerminalEvent(ids, "interrupted"),
+                  ] satisfies ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>);
+            })(),
             close: Deferred.succeed(ingestionDone, undefined).pipe(
               Effect.andThen(input.onSubscriptionClose ?? Effect.void),
             ),

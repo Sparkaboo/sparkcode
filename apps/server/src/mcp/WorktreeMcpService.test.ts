@@ -117,6 +117,9 @@ interface HarnessOptions {
   readonly deleteLocalBranchFails?: boolean;
   readonly createWorktreeGate?: Effect.Effect<void>;
   readonly existsFails?: boolean;
+  readonly worktreesDir?: string;
+  readonly worktreeDirty?: boolean;
+  readonly worktreeExists?: boolean;
 }
 
 const makeHarness = (options: HarnessOptions = {}) => {
@@ -214,6 +217,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
       ? (Effect.fail("simulated local branch deletion failure") as never)
       : Effect.void,
   );
+  const pruneWorktrees = vi.fn((_: unknown) => Effect.void);
   const fetchWorktreeBaseCommit = vi.fn((_: unknown) =>
     options.fetchWorktreeBaseFails
       ? (Effect.fail("simulated fetch failure") as never)
@@ -255,13 +259,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
       totalCount: options.existingBranchWorktreePath === undefined ? 0 : 1,
     }),
   );
-  const localStatus = vi.fn((_: unknown) =>
+  const localStatus = vi.fn((input: { readonly cwd: string }) =>
     Effect.succeed({
       isRepo: options.notARepo !== true,
       hasPrimaryRemote: true,
       isDefaultRef: false,
       refName: options.currentBranch === undefined ? "dev" : options.currentBranch,
-      hasWorkingTreeChanges: false,
+      hasWorkingTreeChanges: input.cwd !== workspaceRoot && options.worktreeDirty === true,
       workingTree: { files: [], insertions: 0, deletions: 0 },
     }),
   );
@@ -322,9 +326,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
           fetchWorktreeBaseCommit,
           createWorktree,
           removeWorktree,
+          pruneWorktrees,
           deleteLocalBranch,
           ...options.git,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
+        Layer.mock(ServerConfig.ServerConfig)({
+          worktreesDir: options.worktreesDir ?? "/worktrees",
+        } as ServerConfig.ServerConfig["Service"]),
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread,
         } satisfies Partial<ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]>),
@@ -345,7 +353,12 @@ const makeHarness = (options: HarnessOptions = {}) => {
                   }),
                 ),
             })
-          : Layer.empty,
+          : options.worktreeExists !== undefined
+            ? FileSystem.layerNoop({
+                exists: () => Effect.succeed(options.worktreeExists!),
+                realPath: (target) => Effect.succeed(target),
+              })
+            : Layer.empty,
       ),
     ),
   );
@@ -359,6 +372,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     fetchWorktreeBaseCommit,
     createWorktree,
     removeWorktree,
+    pruneWorktrees,
     deleteLocalBranch,
     localStatus,
     runForThread,
@@ -393,6 +407,15 @@ const runStatus = (harness: ReturnType<typeof makeHarness>) =>
   Effect.gen(function* () {
     const service = yield* WorktreeMcpService.WorktreeMcpService;
     return yield* service.status(harness.scope);
+  }).pipe(Effect.provide(harness.layer));
+
+const runDetach = (
+  harness: ReturnType<typeof makeHarness>,
+  input: Parameters<WorktreeMcpService.WorktreeMcpService["Service"]["detach"]>[1] = {},
+) =>
+  Effect.gen(function* () {
+    const service = yield* WorktreeMcpService.WorktreeMcpService;
+    return yield* service.detach(harness.scope, input);
   }).pipe(Effect.provide(harness.layer));
 
 const decodeHandoffInput = Schema.decodeUnknownEffect(WorktreeMcpHandoffInput);
@@ -757,4 +780,90 @@ describe("t3_worktree_list", () => {
       expect(harness.listRefs).not.toHaveBeenCalled();
     });
   });
+});
+
+describe("t3_worktree_detach", () => {
+  it.effect("detaches an attached thread back to the project root and queues continuation", () => {
+    const harness = makeHarness({
+      thread: {
+        worktreePath: "/worktrees/project/feature-done",
+        branch: "feature/done",
+      },
+      currentBranch: "main",
+      worktreeExists: true,
+    });
+    return Effect.gen(function* () {
+      const result = yield* runDetach(harness, {
+        removeWorktree: true,
+        continuationPrompt: "Continue in the project checkout.",
+      });
+      expect(result).toMatchObject({
+        previousWorktreePath: "/worktrees/project/feature-done",
+        projectWorkspaceRoot: workspaceRoot,
+        branch: "main",
+        removedWorktree: true,
+        continuation: { status: "scheduled", delivery: "queued" },
+      });
+      expect(harness.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.metadata.update",
+          threadId,
+          branch: "main",
+          worktreePath: null,
+          expectedWorktreePath: "/worktrees/project/feature-done",
+        }),
+      );
+      expect(harness.removeWorktree).toHaveBeenCalledWith({
+        cwd: workspaceRoot,
+        path: "/worktrees/project/feature-done",
+        force: false,
+      });
+    });
+  });
+
+  it.effect("prunes and succeeds when detaching a worktree already removed on disk", () => {
+    const harness = makeHarness({
+      thread: {
+        worktreePath: "/worktrees/project/already-deleted",
+        branch: "feature/gone",
+      },
+      currentBranch: "feature/gone",
+      worktreeExists: false,
+    });
+    return Effect.gen(function* () {
+      const result = yield* runDetach(harness, { removeWorktree: true });
+      expect(result.removedWorktree).toBe(false);
+      expect(result.branch).toBe("feature/gone");
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
+      expect(harness.pruneWorktrees).toHaveBeenCalledWith({ cwd: workspaceRoot });
+    });
+  });
+
+  it.effect(
+    "rejects detaching when not attached, dirty, or unmanaged with removeWorktree=true",
+    () =>
+      Effect.gen(function* () {
+        const notAttached = yield* Effect.exit(
+          runDetach(makeHarness({ thread: { worktreePath: null } })),
+        );
+        expectTypedFailure(notAttached, { _tag: "WorktreeMcpFailure", code: "not_in_worktree" });
+
+        const dirtyHarness = makeHarness({
+          thread: { worktreePath: "/worktrees/project/dirty", branch: "feature/dirty" },
+          worktreeExists: true,
+          worktreeDirty: true,
+        });
+        const dirty = yield* Effect.exit(runDetach(dirtyHarness, { removeWorktree: true }));
+        expectTypedFailure(dirty, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
+        expect(dirtyHarness.dispatch).not.toHaveBeenCalled();
+
+        const unmanagedHarness = makeHarness({
+          thread: { worktreePath: "/external/manual-wt", branch: "feature/manual" },
+          worktreeExists: true,
+        });
+        const unmanaged = yield* Effect.exit(runDetach(unmanagedHarness, { removeWorktree: true }));
+        expectTypedFailure(unmanaged, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
+        expect(unmanagedHarness.dispatch).not.toHaveBeenCalled();
+      }),
+  );
 });

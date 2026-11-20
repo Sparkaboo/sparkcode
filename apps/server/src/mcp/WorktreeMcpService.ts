@@ -5,6 +5,8 @@ import {
   type ProjectId,
   WorktreeMcpFailure,
   type WorktreeMcpContinuationStatus,
+  type WorktreeMcpDetachInput,
+  type WorktreeMcpDetachResult,
   type WorktreeMcpHandoffInput,
   type WorktreeMcpHandoffResult,
   type WorktreeMcpSetupScriptStatus,
@@ -20,14 +22,17 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 
+import type * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
 
 export class WorktreeMcpService extends Context.Service<
@@ -37,6 +42,10 @@ export class WorktreeMcpService extends Context.Service<
       scope: McpInvocationScope,
       input: WorktreeMcpHandoffInput,
     ) => Effect.Effect<WorktreeMcpHandoffResult, WorktreeMcpFailure>;
+    readonly detach: (
+      scope: McpInvocationScope,
+      input: WorktreeMcpDetachInput,
+    ) => Effect.Effect<WorktreeMcpDetachResult, WorktreeMcpFailure>;
     readonly status: (
       scope: McpInvocationScope,
     ) => Effect.Effect<WorktreeMcpStatusResult, WorktreeMcpFailure>;
@@ -75,6 +84,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
   // Serialize handoffs per thread to avoid creating two worktrees and orphaning one.
   const handoffThreadsInFlight = new Set<string>();
@@ -400,29 +410,188 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const performDetach = Effect.fn("WorktreeMcpService.performDetach")(function* (
+    scope: McpThreadInvocationScope,
+    input: WorktreeMcpDetachInput,
+  ) {
+    const projection = yield* loadThread(scope);
+    const currentWorktreePath = projection.thread.worktreePath;
+    if (currentWorktreePath === null) {
+      return yield* failure(
+        "not_in_worktree",
+        `Thread '${scope.thread.threadId}' is not attached to a worktree.`,
+      );
+    }
+    if (projection.thread.archivedAt !== null) {
+      return yield* failure(
+        "invalid_request",
+        `Thread '${scope.thread.threadId}' is archived and cannot be detached from its worktree.`,
+      );
+    }
+
+    const project = yield* loadProject(scope, projection.thread.projectId);
+    const projectCwd = project.workspaceRoot;
+
+    const removeRequested = input.removeWorktree === true;
+    const worktreeExists = removeRequested
+      ? yield* fileSystem.exists(currentWorktreePath).pipe(Effect.orElseSucceed(() => false))
+      : false;
+    if (removeRequested && worktreeExists) {
+      if (!(yield* isManagedWorktreePath(currentWorktreePath))) {
+        return yield* failure(
+          "invalid_request",
+          `Worktree '${currentWorktreePath}' is not a managed worktree folder and cannot be removed automatically. Retry with removeWorktree=false.`,
+        );
+      }
+      const worktreeStatus = yield* gitWorkflow
+        .localStatus({ cwd: currentWorktreePath })
+        .pipe(asOperationFailed("Unable to inspect worktree status before removal"));
+      if (worktreeStatus.hasWorkingTreeChanges) {
+        return yield* failure(
+          "invalid_request",
+          `Worktree '${currentWorktreePath}' has uncommitted changes. Commit or discard them first, or detach with removeWorktree=false.`,
+        );
+      }
+    }
+
+    const projectStatus = yield* gitWorkflow
+      .localStatus({ cwd: projectCwd })
+      .pipe(asOperationFailed("Unable to read project git status"));
+    const projectBranch = projectStatus.isRepo ? projectStatus.refName : null;
+
+    const ids = yield* handoffIds(scope);
+
+    // Mask interruption through rebind, continuation queueing, and cleanup; detaching terminates the caller.
+    return yield* Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        yield* threadManagement
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: ids.commandId,
+            threadId: scope.thread.threadId,
+            branch: projectBranch,
+            worktreePath: null,
+            expectedWorktreePath: currentWorktreePath,
+          })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause as Cause.Cause<never>)
+                : Effect.fail(
+                    failure(
+                      "operation_failed",
+                      `Unable to detach the thread from its worktree: ${errorMessage(Cause.squash(cause))}`,
+                    ),
+                  ),
+            ),
+          );
+
+        const continuation: WorktreeMcpContinuationStatus =
+          input.continuationPrompt === undefined
+            ? { status: "skipped" }
+            : yield* threadManagement
+                .sendToThread({
+                  projectId: projection.thread.projectId,
+                  commandId: ids.continuationCommandId,
+                  threadId: scope.thread.threadId,
+                  messageId: ids.continuationMessageId,
+                  text: input.continuationPrompt,
+                  attachments: [],
+                  mode: "queue",
+                  createdBy: "agent",
+                  creationSource: "mcp",
+                })
+                .pipe(
+                  Effect.map((sendResult): WorktreeMcpContinuationStatus => ({
+                    status: "scheduled",
+                    delivery: sendResult.delivery,
+                  })),
+                  Effect.catchCause((cause) => {
+                    const detail = errorMessage(Cause.squash(cause));
+                    return Effect.logWarning("worktree detach continuation failed to queue", {
+                      threadId: scope.thread.threadId,
+                      previousWorktreePath: currentWorktreePath,
+                      detail,
+                    }).pipe(Effect.as({ status: "failed", detail } as const));
+                  }),
+                );
+
+        let removedWorktree = false;
+        if (removeRequested) {
+          if (worktreeExists) {
+            removedWorktree = yield* gitWorkflow
+              .removeWorktree({ cwd: projectCwd, path: currentWorktreePath, force: false })
+              .pipe(
+                Effect.as(true),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("worktree detach failed to remove managed worktree", {
+                    threadId: scope.thread.threadId,
+                    previousWorktreePath: currentWorktreePath,
+                    detail: errorMessage(Cause.squash(cause)),
+                  }).pipe(Effect.as(false)),
+                ),
+              );
+          } else if (projectStatus.isRepo) {
+            yield* gitWorkflow
+              .pruneWorktrees({ cwd: projectCwd })
+              .pipe(Effect.ignoreCause({ log: true }));
+          }
+        }
+
+        yield* vcsStatusBroadcaster
+          .refreshStatus(projectCwd)
+          .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach);
+
+        const result: WorktreeMcpDetachResult = {
+          previousWorktreePath: currentWorktreePath,
+          projectWorkspaceRoot: projectCwd,
+          branch: projectBranch,
+          removedWorktree,
+          continuation,
+          note:
+            continuation.status === "scheduled"
+              ? "Thread detached from worktree back to the project root. Changing the workspace ends the live session; the queued continuation prompt then resumes in the project root."
+              : "Thread detached from worktree back to the project root. Changing the workspace ends the live session; the next message resumes in the project root.",
+        };
+        return result;
+      }),
+    );
+  });
+
+  const withThreadTransitionLock = <A>(
+    scope: McpThreadInvocationScope,
+    effect: Effect.Effect<A, WorktreeMcpFailure>,
+  ): Effect.Effect<A, WorktreeMcpFailure> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        if (handoffThreadsInFlight.has(scope.thread.threadId)) {
+          return Effect.fail(
+            failure(
+              "handoff_in_progress",
+              `A worktree handoff is already in progress for thread '${scope.thread.threadId}'.`,
+            ),
+          );
+        }
+        handoffThreadsInFlight.add(scope.thread.threadId);
+        return restore(effect).pipe(
+          Effect.ensuring(Effect.sync(() => handoffThreadsInFlight.delete(scope.thread.threadId))),
+        );
+      }),
+    );
+
   const handoff: WorktreeMcpService["Service"]["handoff"] = Effect.fn("WorktreeMcpService.handoff")(
     function* (callerScope, input) {
       yield* requireCapability(callerScope);
       const scope = yield* requireThreadScope(callerScope);
-      // Acquire and register cleanup atomically so cancellation cannot strand the guard until restart.
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.suspend(() => {
-          if (handoffThreadsInFlight.has(scope.thread.threadId)) {
-            return Effect.fail(
-              failure(
-                "handoff_in_progress",
-                `A worktree handoff is already in progress for thread '${scope.thread.threadId}'.`,
-              ),
-            );
-          }
-          handoffThreadsInFlight.add(scope.thread.threadId);
-          return restore(performHandoff(scope, input)).pipe(
-            Effect.ensuring(
-              Effect.sync(() => handoffThreadsInFlight.delete(scope.thread.threadId)),
-            ),
-          );
-        }),
-      );
+      return yield* withThreadTransitionLock(scope, performHandoff(scope, input));
+    },
+  );
+
+  const detach: WorktreeMcpService["Service"]["detach"] = Effect.fn("WorktreeMcpService.detach")(
+    function* (callerScope, input) {
+      yield* requireCapability(callerScope);
+      const scope = yield* requireThreadScope(callerScope);
+      return yield* withThreadTransitionLock(scope, performDetach(scope, input));
     },
   );
 
@@ -457,7 +626,7 @@ const make = Effect.gen(function* () {
     return yield* gitWorkflow.listRefs({ ...refs, cwd });
   });
 
-  return WorktreeMcpService.of({ handoff, status, listRefs });
+  return WorktreeMcpService.of({ handoff, detach, status, listRefs });
 });
 
 export const layer: Layer.Layer<
@@ -465,6 +634,8 @@ export const layer: Layer.Layer<
   never,
   | SecureRandom.SecureRandom
   | FileSystem.FileSystem
+  | Path.Path
+  | ServerConfig.ServerConfig
   | ThreadManagementService.ThreadManagementService
   | ProjectService.ProjectService
   | ServerSettings.ServerSettingsService

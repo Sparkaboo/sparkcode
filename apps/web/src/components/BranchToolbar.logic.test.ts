@@ -4,6 +4,7 @@ import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 import {
   deriveLocalBranchNameFromRemoteRef,
   isWorktreeChangeBlocked,
+  resolveBranchListCwd,
   resolveBranchSelectionTarget,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
@@ -253,6 +254,38 @@ describe("resolveBranchSelectionTarget", () => {
       reuseExistingWorktree: false,
     });
   });
+
+  it("falls back to the project root when the current worktree is unavailable", () => {
+    expect(
+      resolveBranchListCwd({
+        activeWorktreePath: "/repo/.t3/worktrees/removed",
+        activeProjectCwd: "/repo",
+        worktreeUnavailable: true,
+      }),
+    ).toBe("/repo");
+    expect(
+      resolveBranchListCwd({
+        activeWorktreePath: "/repo/.t3/worktrees/live",
+        activeProjectCwd: "/repo",
+        worktreeUnavailable: false,
+      }),
+    ).toBe("/repo/.t3/worktrees/live");
+    expect(
+      resolveBranchSelectionTarget({
+        activeProjectCwd: "/repo",
+        activeWorktreePath: "/repo/.t3/worktrees/removed",
+        worktreeUnavailable: true,
+        refName: {
+          isDefault: false,
+          worktreePath: null,
+        },
+      }),
+    ).toEqual({
+      checkoutCwd: "/repo",
+      nextWorktreePath: null,
+      reuseExistingWorktree: false,
+    });
+  });
 });
 
 describe("isWorktreeChangeBlocked", () => {
@@ -305,6 +338,24 @@ describe("shouldIncludeBranchPickerItem", () => {
         checkoutPullRequestItemValue: null,
       }),
     ).toBe(true);
+    expect(
+      shouldIncludeBranchPickerItem({
+        itemValue: "__detach_worktree__",
+        normalizedQuery: "local",
+        createBranchItemValue: null,
+        checkoutPullRequestItemValue: null,
+        detachWorktreeItemValue: "__detach_worktree__",
+      }),
+    ).toBe(true);
+    expect(
+      shouldIncludeBranchPickerItem({
+        itemValue: "__detach_worktree__",
+        normalizedQuery: "feature/xyz",
+        createBranchItemValue: null,
+        checkoutPullRequestItemValue: null,
+        detachWorktreeItemValue: "__detach_worktree__",
+      }),
+    ).toBe(false);
   });
 });
 

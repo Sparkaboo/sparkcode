@@ -2028,8 +2028,17 @@ describe("orchestration v2 provider switching", () => {
           yield* Deferred.await(started);
           yield* Fiber.join(toolCallRunning);
 
-          const runFailed = yield* awaitEvent(
-            (event) => event.type === "run.updated" && event.payload.status === "failed",
+          const runCompleted = yield* awaitEvent(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.ordinal === 1 &&
+              event.payload.status === "completed",
+          );
+          const continuationCompleted = yield* awaitEvent(
+            (event) =>
+              event.type === "run.updated" &&
+              event.payload.ordinal === 2 &&
+              event.payload.status === "completed",
           );
           yield* orchestrator.dispatch({
             type: "thread.metadata.update",
@@ -2039,13 +2048,37 @@ describe("orchestration v2 provider switching", () => {
             worktreePath,
             expectedWorktreePath: null,
           });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`command:${key}:continuation`),
+            threadId: scenarioThreadId,
+            messageId: MessageId.make(`message:${key}:continuation`),
+            text: "Continue in the new worktree",
+            attachments: [],
+            modelSelection: CLAUDE_MODEL_SELECTION,
+            dispatchMode: { type: "queue_after_active" },
+          });
           yield* worker.drain();
-          yield* Fiber.join(runFailed);
+          yield* Fiber.join(runCompleted);
+          yield* Fiber.join(continuationCompleted);
 
           const projection = yield* orchestrator.getThreadProjection(scenarioThreadId);
           const toolCall = projection.turnItems.find((item) => item.id === toolCallId);
           assert.equal(toolCall?.status, "interrupted");
           assert.isNotNull(toolCall?.completedAt);
+          assert.deepEqual(
+            projection.runs.map((run) => ({ ordinal: run.ordinal, status: run.status })),
+            [
+              { ordinal: 1, status: "completed" },
+              { ordinal: 2, status: "completed" },
+            ],
+          );
+          assert.deepEqual(
+            (yield* Ref.get(capturedTurns)).map((turn) => turn.text),
+            ["Release this session", "Continue in the new worktree"],
+          );
           assert.deepEqual(
             derivePendingBackgroundWork({
               latestRun: projection.runs.at(-1),

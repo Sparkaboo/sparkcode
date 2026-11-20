@@ -1790,6 +1790,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
     openSession: Effect.fn("AcpAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        let sessionClosed = false;
         let itemIdentityVersion: 2 | undefined =
           input.initialProviderItemIdentityVersion ??
           (input.initialNativeThreadId === undefined ? 2 : undefined);
@@ -8850,6 +8851,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
+            sessionClosed = true;
             yield* continuationPermit.withPermit(
               Effect.gen(function* () {
                 yield* Ref.set(continuationClosed, true);
@@ -8911,6 +8913,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession,
           canResumeAfterRestart: canLoadSession || canResumeSession,
+          backgroundTasksEndWithProcess: true,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ...(flavor.getModelContextWindow === undefined
             ? {}
@@ -9177,9 +9180,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           ),
           interruptTurn: Effect.fn("AcpAdapterV2.interruptTurn")(
             function* (turnInput: ProviderAdapter.ProviderAdapterV2InterruptInput) {
+              if (sessionClosed) return;
               return yield* Effect.uninterruptibleMask((restore) =>
                 Effect.gen(function* () {
                   yield* restore(runtimeTransitionPermit.take(1));
+                  let permitHeld = true;
+                  const releasePermit = Effect.suspend(() => {
+                    if (!permitHeld) return Effect.void;
+                    permitHeld = false;
+                    return runtimeTransitionPermit.release(1);
+                  });
+                  if (sessionClosed) {
+                    yield* releasePermit;
+                    return;
+                  }
                   // Stop's caller times out on this call. The transition runs in its own fiber so
                   // a stalled hard teardown keeps its state and permit without holding the caller.
                   const transitionFiber = yield* Effect.gen(function* () {
@@ -9475,14 +9489,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       ),
                     );
                   }).pipe(
-                    Effect.ensuring(runtimeTransitionPermit.release(1)),
+                    Effect.ensuring(releasePermit),
                     Effect.forkIn(sessionScope, { startImmediately: true, uninterruptible: true }),
                   );
-                  return yield* restore(Fiber.join(transitionFiber)).pipe(
+                  const exit = yield* restore(Fiber.await(transitionFiber)).pipe(
                     Effect.onInterrupt(() =>
                       Fiber.interrupt(transitionFiber).pipe(Effect.forkDetach, Effect.asVoid),
                     ),
                   );
+                  if (Exit.isFailure(exit)) {
+                    // Closing sessionScope interrupts transitionFiber while this caller stays alive.
+                    // The session is already torn down, so do not leak Cause.interrupt to the caller.
+                    if (Cause.hasInterruptsOnly(exit.cause)) {
+                      yield* releasePermit;
+                      return;
+                    }
+                    return yield* Effect.failCause(exit.cause);
+                  }
+                  return exit.value;
                 }),
               );
             },

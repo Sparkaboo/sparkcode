@@ -1769,33 +1769,95 @@ export const layer: Layer.Layer<
                   const latestItemOrdinal = yield* Ref.get(latestTurnItemOrdinal);
                   const openSubagents = yield* Ref.get(openRunOwnedSubagents);
                   const squashed = Cause.squash(cause);
-                  let nextRetryWarningAt = completedAt;
-                  yield* writeFinalRunEvents({
-                    run: input.run,
-                    rootNode: input.rootNode,
-                    checkpointScope: input.checkpointScope,
-                    providerThread,
-                    attempt: input.attempt,
-                    writeIfRunCurrent: {
-                      activeAttemptId: input.attempt.id,
-                      expectedStatus: "running",
-                    },
-                    openRunOwnedSubagents: openSubagents,
-                    ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
-                    completedAt,
-                    terminal: makeFailedTerminalEvent(
-                      makeProviderFailure({
-                        cause: squashed,
-                        message:
-                          knownProviderFailureMessage(squashed) ??
-                          userFacingDatabaseErrorMessage(squashed),
-                        class: "unknown",
+                  const handedOff =
+                    input.shouldFinalizeRun !== undefined &&
+                    input.hasWorkspaceMoved !== undefined &&
+                    (yield* input.hasWorkspaceMoved());
+                  const interruptedTerminal: ProviderTerminalEvent = {
+                    type: "turn.terminal",
+                    driver: input.providerThread.driver,
+                    providerThreadId: input.providerThread.id,
+                    providerTurnId:
+                      routing.rootProviderTurnId ??
+                      input.attempt.providerTurnId ??
+                      idAllocator.derive.providerTurn({
+                        driver: input.providerThread.driver,
+                        nativeTurnId: `interrupted:${input.attempt.id}`,
                       }),
-                      latestItemOrdinal + 1,
-                    ),
-                    failureItemPersisted: false,
-                    refreshAfterTurn,
-                  }).pipe(
+                    runOrdinal: input.run.ordinal,
+                    status: "interrupted",
+                    failure: null,
+                    threadDisposition: "reusable",
+                  };
+                  const writeTerminalFailureOrHandoff = handedOff
+                    ? Effect.gen(function* () {
+                        const writeHandoffTerminal = (settledTerminal: ProviderTerminalEvent) =>
+                          writeFinalRunEvents({
+                            run: input.run,
+                            rootNode: input.rootNode,
+                            checkpointScope: input.checkpointScope,
+                            providerThread,
+                            attempt: input.attempt,
+                            shouldFinalizeRun: input.shouldFinalizeRun!,
+                            writeIfRunCurrent: {
+                              activeAttemptId: input.attempt.id,
+                              expectedStatus: "running",
+                              unlessInterruptRequested: settledTerminal !== interruptedTerminal,
+                            },
+                            ...(input.hasUnpairedRunInterruptRequest === undefined
+                              ? {}
+                              : {
+                                  hasUnpairedRunInterruptRequest:
+                                    input.hasUnpairedRunInterruptRequest,
+                                }),
+                            ...(input.loadRunInterruptReason === undefined
+                              ? {}
+                              : { loadRunInterruptReason: input.loadRunInterruptReason }),
+                            openRunOwnedSubagents: openSubagents,
+                            openRunOwnedSubagentsTerminal: interruptedTerminal,
+                            ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
+                            completedAt,
+                            terminal: settledTerminal,
+                            failureItemPersisted: false,
+                            refreshAfterTurn,
+                          });
+                        if (
+                          !(yield* writeHandoffTerminal({
+                            ...interruptedTerminal,
+                            status: "completed",
+                          }))
+                        ) {
+                          yield* writeHandoffTerminal(interruptedTerminal);
+                        }
+                      })
+                    : writeFinalRunEvents({
+                        run: input.run,
+                        rootNode: input.rootNode,
+                        checkpointScope: input.checkpointScope,
+                        providerThread,
+                        attempt: input.attempt,
+                        writeIfRunCurrent: {
+                          activeAttemptId: input.attempt.id,
+                          expectedStatus: "running",
+                        },
+                        openRunOwnedSubagents: openSubagents,
+                        ...(abandonedProviderTurn === null ? {} : { abandonedProviderTurn }),
+                        completedAt,
+                        terminal: makeFailedTerminalEvent(
+                          makeProviderFailure({
+                            cause: squashed,
+                            message:
+                              knownProviderFailureMessage(squashed) ??
+                              userFacingDatabaseErrorMessage(squashed),
+                            class: "unknown",
+                          }),
+                          latestItemOrdinal + 1,
+                        ),
+                        failureItemPersisted: false,
+                        refreshAfterTurn,
+                      });
+                  let nextRetryWarningAt = completedAt;
+                  yield* writeTerminalFailureOrHandoff.pipe(
                     // Storage failures can be defects; retry both failure channels.
                     Effect.catchCause((writeCause) =>
                       Effect.gen(function* () {

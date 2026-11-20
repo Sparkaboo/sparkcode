@@ -1,4 +1,6 @@
 import {
+  WorktreeMcpDetachInput,
+  WorktreeMcpDetachResult,
   WorktreeMcpFailure,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -35,6 +37,21 @@ const WorktreeHandoffTool = Tool.make("t3_worktree_handoff", {
   dependencies,
 })
   .annotate(Tool.Title, "Hand off thread to a git worktree")
+  .annotate(Tool.Readonly, false)
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.OpenWorld, true);
+
+const WorktreeDetachTool = Tool.make("t3_worktree_detach", {
+  description:
+    "Move THIS thread out of its git worktree back to the project root. Call last in your turn. The move ends the live session. `continuationPrompt` resumes there next turn. Set `removeWorktree` true to delete a clean managed worktree.",
+  parameters: WorktreeMcpDetachInput,
+  success: WorktreeMcpDetachResult,
+  failure: WorktreeToolFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Detach thread from its git worktree")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, false)
@@ -84,6 +101,7 @@ const WorktreeListTool = Tool.make("t3_worktree_list", {
   .annotate(Tool.Destructive, false);
 export const WorktreeToolkit = Toolkit.make(
   WorktreeHandoffTool,
+  WorktreeDetachTool,
   WorktreeStatusTool,
   WorktreeListTool,
 );

@@ -586,7 +586,13 @@ export const layer: Layer.Layer<
       }
       const recreateResult = yield* Effect.result(restoreMissingWorktree(projection.thread));
       if (recreateResult._tag === "Failure") {
-        if (input.willRetry === true) return yield* recreateResult.failure;
+        if (
+          input.willRetry === true &&
+          recreateResult.failure._tag !== "WorktreeBranchCheckedOutElsewhereError" &&
+          recreateResult.failure._tag !== "WorktreeRecreateNoBaseError"
+        ) {
+          return yield* recreateResult.failure;
+        }
         yield* settleStartFailure({
           signal: "worktree-recreate-failure",
           title: "Couldn't recreate thread workspace",

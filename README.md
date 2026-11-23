@@ -4,105 +4,113 @@
 
 <h1 align="center">SparkCode</h1>
 
-<p align="center">基于 <a href="https://github.com/pingdotgg/t3code">T3 Code</a> 深度定制的个人桌面版编码 Agent 工作台。</p>
+<p align="center">A deeply customized desktop coding-agent workbench built on <a href="https://github.com/pingdotgg/t3code">T3 Code</a>.</p>
 
 <p align="center">
-  <a href="./README.upstream.md"><strong>原版 README (T3 Code)</strong></a> ·
-  <a href="./docs/README.md">使用与架构文档</a> ·
-  <a href="https://github.com/pingdotgg/t3code">上游仓库</a> ·
+  <strong>English</strong> ·
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="./README.upstream.md"><strong>Upstream README (T3 Code)</strong></a> ·
+  <a href="./docs/README.md">Docs & Architecture</a> ·
+  <a href="https://github.com/pingdotgg/t3code">Upstream Repo</a> ·
   <a href="./LICENSE">MIT License</a>
 </p>
 
 ---
 
-**SparkCode** 是基于开源项目 [T3 Code](https://github.com/pingdotgg/t3code) 构建的独立定制版本，完整保留上游多 Agent 编排（Claude Code、Codex、Cursor、OpenCode、Antigravity、Kiro、ACP 等）、Git Worktree、内置浏览器预览与远程连接能力，并针对日常多项目并行开发工作流进行了交互重构与独立封装。
+**SparkCode** is a standalone customized distribution built on the open-source [T3 Code](https://github.com/pingdotgg/t3code) project. It retains full upstream multi-agent orchestration (Claude Code, Codex, Cursor, OpenCode, Antigravity, Kiro, ACP, and more), Git worktrees, built-in browser preview, and remote access, while refining the workspace UX and packaging for multi-project parallel development.
 
-> 原版完整介绍、Agent 配置指南及通用功能说明请直接查阅 **[原版 README (`README.upstream.md`)](./README.upstream.md)** 与 **[文档目录 (`docs/`)](./docs/README.md)**。
-
----
-
-## 新增功能与定制改动
-
-### 1. 左侧栏项目分组视图
-
-- **默认按项目目录聚合会话**：左侧会话列表默认将同一项目的会话归组展示，减少多仓库并行时的列表混乱。
-- **运行态会话原位保留**：处于 `Working` 状态的活跃会话保持在各自所属项目分组内，不再被单独抽离到顶部独立分组，避免会话执行时位置跳动。
-- **一键视图切换**：侧边栏标题栏提供分组模式与时间流平铺模式的快捷切换按钮。
-
-### 2. 项目级共享全画布二维分屏终端
-
-- **项目级终端持久化（`⌘J`）**：移除底部抽屉式终端，升级为顶栏一键切换的全画布工作区终端，同一项目下的所有会话共享同一组项目终端实例；同时保留单个会话独立的右侧面板终端。
-- **二维二叉树自由分屏**：重构终端布局引擎，支持任意窗格横向、纵向无限层级二分拆分、拖拽分隔条调整比例、窗格焦点高亮与关闭自动合并。
-- **精简顶栏与直觉切换**：去除冗余外框与标题栏，当全画布终端打开时，右上角切换按钮自动切换为返回对话图标，支持随时在对话流与项目终端间无缝往返。
-
-### 3. 悬停式监听端口与进程监控菜单
-
-- **自动端口与 PID 探测**：实时扫描项目终端树内正在监听的本地服务端口及对应进程 `PID`。
-- **悬停快捷面板**：顶栏端口胶囊支持鼠标悬停展开完整监听列表，展示每个端口的协议地址与 `PID`，点击即可在内置预览或浏览器中快速打开。
-
-### 4. 侧边栏轻量用量速览（Usage Quick Popover）
-
-- **即点即看的紧凑浮层**：点击左下角 `Usage` 按钮不再直接打断当前工作流跳转全屏页面，而是弹出轻量速览卡片。
-- **核心配额与开销聚合**：实时展示各已连接订阅 Provider 的额度进度条、重置倒计时，以及近 24 小时 Token 消耗与费用汇总，支持手动刷新及一键展开完整用量分析视图。
-
-### 5. 独立品牌标识、极简视觉与数据隔离
-
-- **极简几何品牌视觉**：采用瑞士几何极简风格（Option F）重绘全套 macOS / Windows / Linux / Web 图标，并将启动加载页替换为无背景边框的内联自适应矢量图形，完美贴合浅色与深色主题。
-- **与官方版完全隔离共存**：
-  - 应用名称与 Bundle ID：`SparkCode`（`com.sparkaboo.sparkcode`）
-  - 自定义协议：`sparkcode://`（开发态 `sparkcode-dev://`）
-  - 默认状态与数据库目录：`~/.sparkcode`（可通过 `--base-dir` 或环境变量 `T3CODE_HOME` 覆盖）
-  - Electron 应用数据目录：`~/Library/Application Support/sparkcode`
-  - 自动更新隔离：本地打包默认不写入更新源，且构建脚本显式拦截指向上游 `pingdotgg/t3code` 的更新地址，避免被官方版本覆盖，可与官方 `T3 Code` 在同一台设备同时安装和并行运行。
+> For the full upstream overview, provider setup guides, and general documentation, see **[Upstream README (`README.upstream.md`)](./README.upstream.md)** and **[Documentation (`docs/`)](./docs/README.md)**.
 
 ---
 
-## 移动端（iOS / Android）连接说明
+## Custom Features & Enhancements
 
-本地打包的 **SparkCode** 保持与上游一致的编排通信协议（`ORCHESTRATION_PROTOCOL_VERSION = 2`）与配对链接格式，**可以直接搭配 App Store / Google Play 上的官方 `T3 Code` 手机客户端使用**：
+### 1. Project-Grouped Sidebar View
 
-1. **局域网（LAN）或 Tailscale 直连（推荐）**：在 SparkCode 桌面端打开 **Settings -> Sharing & access**，开启 **Network access** 或 **Tailscale HTTPS**，生成配对二维码或链接，使用手机端 `T3 Code` 扫码或粘贴至 **Settings -> Environments -> Add environment** 即可完成配对。
-2. **关于 T3 Connect 云中继**：官方 `T3 Connect` 依赖官方发行版构建时注入的私有云端中继与鉴权密钥，本地源码直编版本默认不包含官方云密钥；跨网远程访问建议使用 [Tailscale](./docs/user/remote-access.md#tailscale-https) 直连。
+- **Grouped by project directory by default**: Threads in the sidebar are organized under their parent project directory to keep multi-repo parallel workflows clear.
+- **In-place active threads**: Threads in the `Working` state remain inside their project group instead of jumping to a separate top-level section while running.
+- **One-click view toggle**: Quickly switch between project-grouped mode and chronological flat list mode from the sidebar header.
+
+### 2. Project-Shared Full-Canvas 2D Split Terminal
+
+- **Persistent project-level terminal (`⌘J`)**: Replaces the bottom drawer terminal with a full-canvas workspace terminal toggled from the top bar. All threads in the same project share one persistent terminal workspace, while keeping per-thread side-panel terminals available.
+- **2D binary-tree pane splitting**: Split any terminal pane horizontally or vertically to arbitrary depth, drag dividers to resize, highlight focused panes, and automatically collapse panes on close.
+- **Streamlined header & quick switching**: Removes redundant framing and chrome; when the full-canvas terminal is open, the top-right toggle switches directly to a return-to-chat action for seamless back-and-forth navigation.
+
+### 3. Hover Port & Process Monitor Menu
+
+- **Automatic port and PID detection**: Continuously detects local listening ports and their owning process `PID`s across the project's terminal tree.
+- **Hover quick panel**: Hovering the top-bar port pill reveals all active listening endpoints with protocol URLs and `PID`s—click any entry to open it in the built-in preview or your browser.
+
+### 4. Sidebar Usage Quick Popover
+
+- **Instant lightweight summary**: Clicking the bottom-left `Usage` button opens a compact popover instead of pulling you out of your current thread.
+- **Quotas and spend at a glance**: Displays quota progress bars, reset countdowns across connected subscription providers, and 24-hour token usage and cost summaries, with manual refresh and one-click expansion to the full usage view.
+
+### 5. Standalone Branding, Minimal Visuals & Data Isolation
+
+- **Minimal geometric identity**: Custom Swiss-geometric icon set (Option F) across macOS, Windows, Linux, and Web, paired with a borderless adaptive SVG splash loader for both light and dark themes.
+- **Fully isolated alongside official T3 Code**:
+  - App name & Bundle ID: `SparkCode` (`com.sparkaboo.sparkcode`)
+  - Custom URL scheme: `sparkcode://` (`sparkcode-dev://` in development)
+  - Default state & database directory: `~/.sparkcode` (overridable via `--base-dir` or `T3CODE_HOME`)
+  - Electron app data directory: `~/Library/Application Support/sparkcode`
+  - Auto-update isolation: Local builds omit upstream update feeds and explicitly block `pingdotgg/t3code` update URLs so official T3 Code and SparkCode can be installed and run side by side without conflicts.
+  - Telemetry disabled by default: Upstream analytics endpoints and keys are removed, and telemetry is off by default.
 
 ---
 
-## 下载 SparkCode
+## Mobile Client (iOS / Android)
 
-桌面安装包及独立 CLI 见 [SparkCode Releases](https://github.com/Sparkaboo/sparkcode/releases/latest)。macOS 提供 Apple Silicon 和 Intel 版本，Windows 与 Linux 提供 x64 和 arm64 版本。从本地打包的 0.1.9 首次升级时，请手动下载安装包。
+**SparkCode** preserves the upstream orchestration protocol (`ORCHESTRATION_PROTOCOL_VERSION = 2`) and pairing link format, so it works **directly with the official `T3 Code` mobile app on the App Store and Google Play**:
 
-macOS Apple Silicon 和 Linux 可以用以下命令安装 CLI。Windows 在 PowerShell 中使用版本页面提供的 `install.ps1`。安装完成后运行 `sparkcode --version`。
+1. **LAN or Tailscale direct connection (recommended)**: In SparkCode desktop, open **Settings -> Sharing & access**, enable **Network access** or **Tailscale HTTPS**, and scan the QR code or paste the pairing link into **Settings -> Environments -> Add environment** on the mobile app.
+2. **About T3 Connect cloud relay**: Official `T3 Connect` relies on private cloud relay credentials injected during official upstream releases and is not bundled in standalone builds. For remote access across networks, use [Tailscale](./docs/user/remote-access.md#tailscale-https).
+
+---
+
+## Download SparkCode
+
+Desktop installers and standalone CLI binaries are available on [SparkCode Releases](https://github.com/Sparkaboo/sparkcode/releases/latest) for macOS (Apple Silicon & Intel), Windows (x64 & arm64), and Linux (x64 & arm64). When upgrading from a locally built `0.1.9` build for the first time, please install the new package manually.
+
+Install the CLI on macOS (Apple Silicon) and Linux with:
 
 ```sh
 curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh
 ```
 
-## 本地开发与打包
+On Windows, run the `install.ps1` script from the release page in PowerShell. Verify installation with `sparkcode --version`.
 
-### 环境准备与启动
+## Local Development & Packaging
+
+### Setup & Run
 
 ```bash
 vp i
 pnpm dev:desktop
 ```
 
-### 构建 macOS 安装包（Apple Silicon `.dmg`）
+### Build macOS Installer (Apple Silicon `.dmg`)
 
 ```bash
 pnpm dist:desktop:dmg:arm64
 ```
 
-若本机 Rust 工具链低于 `native/resource-monitor` 所需的版本，可复用仓库已编译的二进制直接打包：
+If your local Rust toolchain is older than required by `native/resource-monitor`, you can reuse the prebuilt binary checked into the repository:
 
 ```bash
 T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR=true pnpm dist:desktop:dmg:arm64
 ```
 
-构建产物输出至 `release/SparkCode-<version>-arm64.dmg` 与 `release/SparkCode-<version>-arm64.zip`。
+Build artifacts are written to `release/SparkCode-<version>-arm64.dmg` and `release/SparkCode-<version>-arm64.zip`.
 
 ---
 
-## 上游文档与许可证
+## Upstream Documentation & License
 
-- 原版说明文档：[README.upstream.md](./README.upstream.md)
-- 完整用户与内部架构文档：[docs/README.md](./docs/README.md)
-- 开源许可证：[MIT](./LICENSE)
+- Upstream README: [README.upstream.md](./README.upstream.md)
+- Full user and internal architecture docs: [docs/README.md](./docs/README.md)
+- License: [MIT](./LICENSE)

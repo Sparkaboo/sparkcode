@@ -395,45 +395,55 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
     }),
   );
 
-  it.effect("does not send batch requests when telemetry is disabled", () =>
+  it.effect("does not send batch requests by default, when disabled, or without an endpoint", () =>
     Effect.gen(function* () {
       const capturedPaths: Array<string> = [];
-      const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-telemetry-disabled-",
-      });
-      const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
-      const layerConfig = ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: false,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
-        }),
-      );
-      const layerBatchServer = HttpServer.serve(
+      const runWithConfig = (config: Record<string, unknown>) =>
         Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          capturedPaths.push(request.url);
-          return HttpServerResponse.jsonUnsafe({});
-        }),
-      );
-      const layerRuntime = layerTelemetry.pipe(
-        Layer.provide(layerConfig),
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(HostProcess.Platform, "linux"),
-            Layer.succeed(HostProcess.Architecture, "arm64"),
-            ManagedPolicy.layerTest(),
-          ),
-        ),
-        Layer.provideMerge(NodeHttpServer.layerTest),
-      );
+          const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
+            prefix: "t3-telemetry-disabled-",
+          });
+          const layerTelemetry = AnalyticsService.layer.pipe(Layer.provideMerge(layerServerConfig));
+          const layerConfig = ConfigProvider.layer(ConfigProvider.fromUnknown(config));
+          const layerBatchServer = HttpServer.serve(
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              capturedPaths.push(request.url);
+              return HttpServerResponse.jsonUnsafe({});
+            }),
+          );
+          const layerRuntime = layerTelemetry.pipe(
+            Layer.provide(layerConfig),
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(HostProcess.Platform, "linux"),
+                Layer.succeed(HostProcess.Architecture, "arm64"),
+                ManagedPolicy.layerTest(),
+              ),
+            ),
+            Layer.provideMerge(NodeHttpServer.layerTest),
+          );
 
-      yield* Effect.gen(function* () {
-        yield* Layer.launch(layerBatchServer).pipe(Effect.forkScoped);
-        const analytics = yield* AnalyticsService.AnalyticsService;
-        yield* analytics.record("test.disabled", { index: 1 });
-        yield* analytics.flush;
-      }).pipe(Effect.provide(layerRuntime));
+          yield* Effect.gen(function* () {
+            yield* Layer.launch(layerBatchServer).pipe(Effect.forkScoped);
+            const analytics = yield* AnalyticsService.AnalyticsService;
+            yield* analytics.record("test.disabled", { index: 1 });
+            yield* analytics.flush;
+          }).pipe(Effect.provide(layerRuntime));
+        });
+
+      // Default config leaves telemetry off with no upstream PostHog endpoint.
+      yield* runWithConfig({});
+      // Explicit opt-out keeps requests off even with an endpoint configured.
+      yield* runWithConfig({
+        T3CODE_TELEMETRY_ENABLED: false,
+        T3CODE_POSTHOG_KEY: "phc_test_key",
+        T3CODE_POSTHOG_HOST: "http://localhost",
+      });
+      // Opting in without a custom key/host still sends nothing.
+      yield* runWithConfig({
+        T3CODE_TELEMETRY_ENABLED: true,
+      });
 
       assert.deepEqual(capturedPaths, []);
     }),

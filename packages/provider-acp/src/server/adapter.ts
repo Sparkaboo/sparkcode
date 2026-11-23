@@ -361,6 +361,8 @@ export interface AcpAdapterV2Flavor {
   ) => Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner>;
   readonly driver: ProviderDriverKind;
   readonly capabilities: OrchestrationV2ProviderCapabilities;
+  /** Set only when all session background tasks and tool calls end when the ACP subprocess exits. */
+  readonly backgroundTasksEndWithProcess?: true;
   readonly supportsNativeGoals?: Effect.Effect<boolean>;
   readonly clientCapabilitiesMeta?: NonNullable<
     EffectAcpSchema.InitializeRequest["clientCapabilities"]
@@ -8913,7 +8915,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           providerSession,
           canResumeAfterRestart: canLoadSession || canResumeSession,
-          backgroundTasksEndWithProcess: true,
+          ...(flavor.backgroundTasksEndWithProcess === true
+            ? { backgroundTasksEndWithProcess: true }
+            : {}),
           events: Stream.fromEffectRepeat(Queue.take(events)),
           ...(flavor.getModelContextWindow === undefined
             ? {}

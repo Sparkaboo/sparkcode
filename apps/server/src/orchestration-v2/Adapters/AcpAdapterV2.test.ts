@@ -6128,6 +6128,7 @@ describe("AcpAdapterV2", () => {
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
+            backgroundTasksEndWithProcess: true,
             makeRuntime,
           },
           selfInvocation,

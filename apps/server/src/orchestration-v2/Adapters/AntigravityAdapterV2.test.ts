@@ -79,6 +79,7 @@ describe("AntigravityAdapterV2 flavor", () => {
     assert.equal(batch?.prompt, "Started two agents.");
     assert.isNull(batch?.result);
     assert.isTrue(flavor.subagentsIdleOnTurnCompletion);
+    assert.isTrue(flavor.backgroundTasksEndWithProcess);
 
     // Permission prompts carry the launch; later updates for the same call do not.
     const launch = flavor.extractSubagentUpdate?.({

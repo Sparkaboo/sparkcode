@@ -27,6 +27,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
+import { useGT } from "gt-react";
 
 interface AcpSessionProject {
   readonly id: ProjectId;
@@ -106,6 +107,7 @@ function InstanceSessionManagement(
     readonly onProjectChange: (projectId: ProjectId) => void;
   },
 ) {
+  const gt = useGT();
   const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
   const canRead = useEnvironmentScope(props.environmentId, AuthOrchestrationReadScope);
   const { projectId } = props;
@@ -265,7 +267,7 @@ function InstanceSessionManagement(
       setSessions((current) =>
         current.filter((candidate) => candidate.sessionId !== session.sessionId),
       );
-      toastManager.add({ type: "success", title: "ACP session deleted" });
+      toastManager.add({ type: "success", title: gt("ACP session deleted") });
       return;
     }
     reportFailure("Could not delete ACP session", result);
@@ -317,7 +319,7 @@ function InstanceSessionManagement(
     if (!parsedHeaders.ok) {
       toastManager.add({
         type: "error",
-        title: "Invalid provider headers",
+        title: gt("Invalid provider headers"),
         description: parsedHeaders.error,
       });
       return;
@@ -338,7 +340,7 @@ function InstanceSessionManagement(
     if (generation !== projectGeneration.current) return;
     setSavingProviderId(null);
     if (result._tag === "Success") {
-      toastManager.add({ type: "success", title: "ACP provider configured" });
+      toastManager.add({ type: "success", title: gt("ACP provider configured") });
       await loadProviders(provider.providerId);
       return;
     }
@@ -367,7 +369,7 @@ function InstanceSessionManagement(
     if (generation !== projectGeneration.current) return;
     setSavingProviderId(null);
     if (result._tag === "Success") {
-      toastManager.add({ type: "success", title: "ACP provider disabled" });
+      toastManager.add({ type: "success", title: gt("ACP provider disabled") });
       await loadProviders(provider.providerId);
       return;
     }
@@ -385,7 +387,7 @@ function InstanceSessionManagement(
     if (result._tag === "Success") {
       setSessions([]);
       setNextCursor(null);
-      toastManager.add({ type: "success", title: "Logged out of ACP agent" });
+      toastManager.add({ type: "success", title: gt("Logged out of ACP agent") });
       return;
     }
     reportFailure("Could not log out of ACP agent", result);
@@ -394,8 +396,8 @@ function InstanceSessionManagement(
   return (
     <div className="grid gap-3">
       <SettingsRow
-        title="Native sessions"
-        description="Resume agent-owned conversations as T3 threads."
+        title={gt("Native sessions")}
+        description={gt("Resume agent-owned conversations as T3 threads.")}
         status={
           canList && props.projects.length === 0
             ? "Add a project before importing sessions."
@@ -411,7 +413,7 @@ function InstanceSessionManagement(
                 disabled={props.readOnly || loggingOut}
                 onClick={() => void logoutProvider()}
               >
-                {loggingOut ? "Logging out" : "Log out"}
+                {loggingOut ? gt("Logging out") : gt("Log out")}
               </Button>
             ) : null}
             {canList && props.projects.length > 0 ? (
@@ -424,7 +426,11 @@ function InstanceSessionManagement(
                     props.onProjectChange(value as ProjectId);
                   }}
                 >
-                  <SelectTrigger aria-label="Project for ACP sessions" className="w-40" size="sm">
+                  <SelectTrigger
+                    aria-label={gt("Project for ACP sessions")}
+                    className="w-40"
+                    size="sm"
+                  >
                     <SelectValue>
                       {props.projects.find((project) => project.id === projectId)?.title}
                     </SelectValue>
@@ -444,7 +450,11 @@ function InstanceSessionManagement(
                   disabled={!canRead || loading || projectId === null}
                   onClick={() => void loadSessions()}
                 >
-                  {loading ? "Loading" : sessions.length === 0 ? "List sessions" : "Refresh"}
+                  {loading
+                    ? gt("Loading")
+                    : sessions.length === 0
+                      ? gt("List sessions")
+                      : gt("Refresh")}
                 </Button>
               </>
             ) : null}
@@ -482,10 +492,10 @@ function InstanceSessionManagement(
                         onClick={() => void importNativeSession(session)}
                       >
                         {!needsImport(session)
-                          ? "Imported"
+                          ? gt("Imported")
                           : importingSessionId === session.sessionId
-                            ? "Importing"
-                            : "Import"}
+                            ? gt("Importing")
+                            : gt("Import")}
                       </Button>
                       {canDelete ? (
                         <Button
@@ -499,7 +509,7 @@ function InstanceSessionManagement(
                           }
                           onClick={() => void deleteNativeSession(session)}
                         >
-                          {deletingSessionId === session.sessionId ? "Deleting" : "Delete"}
+                          {deletingSessionId === session.sessionId ? gt("Deleting") : gt("Delete")}
                         </Button>
                       ) : null}
                     </div>
@@ -517,7 +527,7 @@ function InstanceSessionManagement(
                 disabled={!canRead || loading}
                 onClick={() => void loadSessions(nextCursor)}
               >
-                {loading ? "Loading" : "Load more"}
+                {loading ? gt("Loading") : gt("Load more")}
               </Button>
             ) : null}
           </>
@@ -528,9 +538,9 @@ function InstanceSessionManagement(
         <div className="grid gap-3 border-t border-border/60 px-3 py-3 sm:px-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <p className="text-xs font-medium text-foreground">Agent providers</p>
+              <p className="text-xs font-medium text-foreground">{gt("Agent providers")}</p>
               <p className="text-xs text-muted-foreground">
-                Configure non-secret routing. Headers are write-only.
+                {gt("Configure non-secret routing. Headers are write-only.")}
               </p>
             </div>
             <Button
@@ -542,7 +552,11 @@ function InstanceSessionManagement(
               }
               onClick={() => void loadProviders()}
             >
-              {loadingProviders ? "Loading" : providers.length === 0 ? "List providers" : "Refresh"}
+              {loadingProviders
+                ? gt("Loading")
+                : providers.length === 0
+                  ? gt("List providers")
+                  : gt("Refresh")}
             </Button>
           </div>
 
@@ -555,7 +569,11 @@ function InstanceSessionManagement(
                 props.onProjectChange(value as ProjectId);
               }}
             >
-              <SelectTrigger aria-label="Project for ACP providers" className="min-w-48" size="xs">
+              <SelectTrigger
+                aria-label={gt("Project for ACP providers")}
+                className="min-w-48"
+                size="xs"
+              >
                 <SelectValue>
                   {props.projects.find((project) => project.id === projectId)?.title}
                 </SelectValue>
@@ -591,8 +609,8 @@ function InstanceSessionManagement(
                           {provider.providerId}
                         </p>
                         <p className="text-3xs text-muted-foreground">
-                          {provider.current === null ? "Disabled" : "Configured"}
-                          {provider.required ? " · Required" : ""}
+                          {provider.current === null ? gt("Disabled") : gt("Configured")}
+                          {provider.required ? gt(" · Required") : ""}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
@@ -609,7 +627,7 @@ function InstanceSessionManagement(
                           }
                           onClick={() => void saveProvider(provider)}
                         >
-                          {savingProviderId === provider.providerId ? "Saving" : "Save"}
+                          {savingProviderId === provider.providerId ? gt("Saving") : gt("Save")}
                         </Button>
                         {!provider.required && provider.current !== null ? (
                           <Button
@@ -621,7 +639,7 @@ function InstanceSessionManagement(
                             }
                             onClick={() => void disableConfiguredProvider(provider)}
                           >
-                            Disable
+                            {gt("Disable")}
                           </Button>
                         ) : null}
                       </div>

@@ -50,6 +50,7 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { isSourceControlProviderOffered } from "@t3tools/client-runtime/operations/projects";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { sourceControlIcon } from "~/sourceControlPresentation";
+import { useGT } from "gt-react";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
   versionControlSystems: [],
@@ -223,6 +224,7 @@ function DiscoveryItemRow({
   };
   readonly children?: ReactNode;
 }) {
+  const gt = useGT();
   const version = optionLabel(item.version);
   const auth = isProviderDiscoveryItem(item) ? item.auth : null;
   const authStatus = auth ? authPresentation(auth) : null;
@@ -253,7 +255,7 @@ function DiscoveryItemRow({
               {version ? <code className="text-xs text-muted-foreground">{version}</code> : null}
               {isVcsNotReady(item) ? (
                 <Badge variant="warning" size="sm">
-                  Coming Soon
+                  {gt("Coming Soon")}
                 </Badge>
               ) : null}
               {authStatus?.badge ? (
@@ -292,7 +294,9 @@ function DiscoveryItemRow({
                     />
                   }
                 />
-                <TooltipPopup side="top">Offer when adding or publishing a project</TooltipPopup>
+                <TooltipPopup side="top">
+                  {gt("Offer when adding or publishing a project")}
+                </TooltipPopup>
               </Tooltip>
             ) : !isVcsNotReady(item) ? (
               <Switch
@@ -363,28 +367,30 @@ function EmptySourceControlDiscovery({
   readonly isPending: boolean;
   readonly onScan: () => void;
 }) {
+  const gt = useGT();
   const hasError = error !== null;
 
   return (
-    <SettingsSection id={searchableSetting("source-control").id} title="Server environment">
+    <SettingsSection id={searchableSetting("source-control").id} title={gt("Server environment")}>
       <Empty>
         <EmptyMedia variant="icon">
           <PullRequestGlyph.pullRequest />
         </EmptyMedia>
         <EmptyHeader>
           <EmptyTitle>
-            {hasError ? "Could not scan the server environment" : "Nothing detected yet"}
+            {hasError ? gt("Could not scan the server environment") : gt("Nothing detected yet")}
           </EmptyTitle>
           <EmptyDescription>
             {hasError
               ? error
-              : "Install Git on the server, add optional hosting integrations or credentials your workspace needs, then rescan."}
+              : gt(
+                  "Install Git on the server, add optional hosting integrations or credentials your workspace needs, then rescan.",
+                )}
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
           <Button size="sm" variant="outline" onClick={onScan} disabled={isPending}>
-            <RefreshIcon size="sm" refreshing={isPending} />
-            Scan
+            <RefreshIcon size="sm" refreshing={isPending} /> {gt("Scan")}{" "}
           </Button>
         </EmptyContent>
       </Empty>
@@ -393,6 +399,7 @@ function EmptySourceControlDiscovery({
 }
 
 export function SourceControlSettingsPanel() {
+  const gt = useGT();
   const { scope, environment, connectedEnvironments } = useSettingsScope();
 
   const environmentId =
@@ -416,7 +423,7 @@ export function SourceControlSettingsPanel() {
   };
   const offeredProviders = environment?.serverConfig?.settings.offeredSourceControlProviders;
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "save source control providers",
+    label: gt("save source control providers"),
   });
   const canUpdateSettings = useAtomValue(
     serverEnvironment.updateSettings.permissionAtom(environmentId),
@@ -487,13 +494,13 @@ export function SourceControlSettingsPanel() {
             variant="ghost-muted"
             onClick={handleScan}
             disabled={discovery.isPending}
-            aria-label="Rescan server environment"
+            aria-label={gt("Rescan server environment")}
           >
             <RefreshIcon refreshing={discovery.isPending} />
           </Button>
         }
       />
-      <TooltipPopup side="top">Rescan Git and hosting integrations</TooltipPopup>
+      <TooltipPopup side="top">{gt("Rescan Git and hosting integrations")}</TooltipPopup>
     </Tooltip>
   );
 
@@ -501,9 +508,14 @@ export function SourceControlSettingsPanel() {
     <SettingsPageContainer>
       <ProjectDefaultsSettings category="source-control" />
       {environmentId === null ? (
-        <SettingsSection id={searchableSetting("source-control").id} title="Server environment">
+        <SettingsSection
+          id={searchableSetting("source-control").id}
+          title={gt("Server environment")}
+        >
           <p className="px-4 py-3 text-sm text-muted-foreground">
-            Connect an environment to inspect its version control tools and hosting integrations.
+            {gt(
+              "Connect an environment to inspect its version control tools and hosting integrations.",
+            )}
           </p>
         </SettingsSection>
       ) : isInitialScanPending ? (
@@ -512,7 +524,7 @@ export function SourceControlSettingsPanel() {
             title={`Version Control${environmentSuffix}`}
             headerAction={scanButton}
           />
-          <SourceControlSectionSkeleton title="Source control providers" />
+          <SourceControlSectionSkeleton title={gt("Source control providers")} />
         </>
       ) : hasDiscoveryItems ? (
         <>
@@ -533,7 +545,7 @@ export function SourceControlSettingsPanel() {
               id={hasVersionControlSystems ? undefined : searchableSetting("source-control").id}
               title={
                 hasVersionControlSystems
-                  ? "Source control providers"
+                  ? gt("Source control providers")
                   : `Source control providers${environmentSuffix}`
               }
               headerAction={hasVersionControlSystems ? null : scanButton}

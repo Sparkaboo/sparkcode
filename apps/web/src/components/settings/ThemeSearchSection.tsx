@@ -29,6 +29,7 @@ import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
+import { useGT, msg, useMessages } from "gt-react";
 
 const DOWNLOAD_FORMAT = new Intl.NumberFormat(undefined, {
   notation: "compact",
@@ -36,10 +37,10 @@ const DOWNLOAD_FORMAT = new Intl.NumberFormat(undefined, {
 });
 const SUGGESTED_SEARCHES = ["Dracula", "Catppuccin", "Nord", "Tokyo Night"];
 const SORT_OPTIONS: ReadonlyArray<{ value: OpenVsxThemeSort; label: string }> = [
-  { value: "downloadCount", label: "Most downloaded" },
-  { value: "rating", label: "Best rated" },
-  { value: "timestamp", label: "Newest" },
-  { value: "relevance", label: "Most relevant" },
+  { value: "downloadCount", label: msg("Most downloaded") },
+  { value: "rating", label: msg("Best rated") },
+  { value: "timestamp", label: msg("Newest") },
+  { value: "relevance", label: msg("Most relevant") },
 ];
 const SEARCH_DEBOUNCE_MS = 350;
 
@@ -234,6 +235,8 @@ export function ThemeSearchSection({
   signal: AbortSignal;
   onInstalled: (themes: ReadonlyArray<ThemeDefinition>, context: { updated: boolean }) => void;
 }) {
+  const m = useMessages();
+  const gt = useGT();
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<OpenVsxThemeSort>("downloadCount");
   const [results, setResults] = useState<ReadonlyArray<OpenVsxThemeExtension> | null>(null);
@@ -294,10 +297,10 @@ export function ThemeSearchSection({
     <section className="space-y-3" aria-labelledby="theme-search-heading">
       <div>
         <h3 className="text-sm font-medium" id="theme-search-heading">
-          Search community themes
+          {gt("Search community themes")}
         </h3>
         <p className="mt-0.5 text-muted-foreground text-xs">
-          Find open-source themes from Open VSX.
+          {gt("Find open-source themes from Open VSX.")}
         </p>
       </div>
       <InputGroup>
@@ -305,7 +308,7 @@ export function ThemeSearchSection({
           {isSearching ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
         </InputGroupAddon>
         <InputGroupInput
-          aria-label="Search Open VSX themes"
+          aria-label={gt("Search Open VSX themes")}
           autoFocus
           onChange={(event) => changeQuery(event.currentTarget.value)}
           onKeyDown={(event) => {
@@ -313,7 +316,7 @@ export function ThemeSearchSection({
             if (event.key === "Enter" && !isSearching && installingId === null)
               themeSearch.searchNow();
           }}
-          placeholder="Search themes..."
+          placeholder={gt("Search themes...")}
           size="lg"
           type="search"
           value={query}
@@ -323,7 +326,7 @@ export function ThemeSearchSection({
       {!isSearching || results !== null ? (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <p className="text-muted-foreground text-xs">Popular</p>
+            <p className="text-muted-foreground text-xs">{gt("Popular")}</p>
             {SUGGESTED_SEARCHES.map((suggestion) => (
               <Button
                 key={suggestion}
@@ -344,13 +347,13 @@ export function ThemeSearchSection({
           </div>
           {results && results.length > 0 ? (
             <div className="flex shrink-0 items-center justify-end gap-2">
-              <p className="text-muted-foreground text-xs">Sort</p>
+              <p className="text-muted-foreground text-xs">{gt("Sort")}</p>
               <Select
                 disabled={installingId !== null}
                 value={sortBy}
                 onValueChange={handleSortChange}
               >
-                <SelectTrigger size="sm" className="w-40" aria-label="Sort themes">
+                <SelectTrigger size="sm" className="w-40" aria-label={gt("Sort themes")}>
                   <SelectValue>
                     {SORT_OPTIONS.find((option) => option.value === sortBy)?.label}
                   </SelectValue>
@@ -358,7 +361,7 @@ export function ThemeSearchSection({
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   {SORT_OPTIONS.map((option) => (
                     <SelectItem key={option.value} hideIndicator value={option.value}>
-                      {option.label}
+                      {m(option.label)}
                     </SelectItem>
                   ))}
                 </SelectPopup>
@@ -370,7 +373,7 @@ export function ThemeSearchSection({
 
       <div className="sr-only" role="status">
         {isSearching
-          ? "Searching themes..."
+          ? gt("Searching themes...")
           : results
             ? `${results.length} supported ${results.length === 1 ? "theme" : "themes"} found.`
             : ""}
@@ -384,15 +387,15 @@ export function ThemeSearchSection({
 
       {isSearching && results === null ? (
         <div className="flex min-h-20 items-center justify-center gap-2 text-muted-foreground text-sm">
-          <Spinner /> Searching themes...
+          <Spinner /> {gt("Searching themes...")}{" "}
         </div>
       ) : null}
 
       {results ? (
         results.length === 0 ? (
           <div className="flex min-h-40 flex-col items-center justify-center rounded-2xl border border-dashed text-center">
-            <p className="text-sm font-medium">No supported open-source themes found</p>
-            <p className="mt-1 text-muted-foreground text-xs">Try a broader search.</p>
+            <p className="text-sm font-medium">{gt("No supported open-source themes found")}</p>
+            <p className="mt-1 text-muted-foreground text-xs">{gt("Try a broader search.")}</p>
           </div>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">
@@ -419,7 +422,7 @@ export function ThemeSearchSection({
                     </div>
                   </div>
                   <p className="line-clamp-2 min-h-8 text-muted-foreground text-xs leading-4">
-                    {extension.description || "A community color theme for your editor."}
+                    {extension.description || gt("A community color theme for your editor.")}
                   </p>
                   <div className="mt-auto flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
@@ -466,14 +469,20 @@ export function ThemeSearchSection({
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Update “{pendingUpdate?.name}”?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {gt("Update “")}
+              {pendingUpdate?.name}”?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This replaces its installed variants, including any local edits. Variants no longer in
-              the extension will be removed.
+              {gt(
+                "This replaces its installed variants, including any local edits. Variants no longer in the extension will be removed.",
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               onClick={() => {
                 const extension = pendingUpdate;
@@ -481,7 +490,7 @@ export function ThemeSearchSection({
                 if (extension) void handleInstall(extension, true);
               }}
             >
-              Update theme
+              {gt("Update theme")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

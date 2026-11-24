@@ -20,6 +20,7 @@ import { useNowSecond } from "../../hooks/useNowSecond";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { useGT } from "gt-react";
 
 /**
  * What failed on the way to an environment, or null while it is connected, off,
@@ -87,6 +88,7 @@ export function ConnectionDiagnosisSummary({
   readonly expanded: boolean;
   readonly onToggle: () => void;
 }) {
+  const gt = useGT();
   return (
     <div className="text-xs">
       <p className="text-destructive">{diagnosis.headline}</p>
@@ -101,7 +103,8 @@ export function ConnectionDiagnosisSummary({
           onClick={onToggle}
           className="inline-flex items-center gap-0.5 rounded-sm outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
         >
-          Details
+          {" "}
+          {gt("Details")}{" "}
           <ChevronRightIcon
             aria-hidden
             className={cn(
@@ -127,14 +130,15 @@ export function ConnectionDiagnosisPanel({
   readonly onRetry: () => void;
   readonly onAddRoute: (() => void) | null;
 }) {
+  const gt = useGT();
   const { copyToClipboard } = useCopyToClipboard({
     target: "connection diagnostics",
-    onCopy: () => toastManager.add({ type: "success", title: "Diagnostics copied" }),
+    onCopy: () => toastManager.add({ type: "success", title: gt("Diagnostics copied") }),
     onError: (error) =>
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Could not copy diagnostics",
+          title: gt("Could not copy diagnostics"),
           description: error.message,
         }),
       ),
@@ -159,7 +163,7 @@ export function ConnectionDiagnosisPanel({
         ))}
       </ol>
       <div>
-        <p className="font-medium text-foreground">What to try</p>
+        <p className="font-medium text-foreground">{gt("What to try")}</p>
         <ol className="list-decimal pl-4 text-muted-foreground">
           {diagnosis.steps.map((step) => (
             <li key={step}>{step}</li>
@@ -172,7 +176,7 @@ export function ConnectionDiagnosisPanel({
             rel="noreferrer"
             className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
-            More info
+            {gt("More info")}
           </a>
         ) : null}
       </div>
@@ -186,7 +190,7 @@ export function ConnectionDiagnosisPanel({
       </dl>
       <div className="flex flex-wrap gap-2">
         <Button type="button" size="xs" variant="outline" onClick={onRetry}>
-          Retry now
+          {gt("Retry now")}
         </Button>
         <Button
           type="button"
@@ -197,11 +201,11 @@ export function ConnectionDiagnosisPanel({
             copyToClipboard(text, undefined);
           }}
         >
-          Copy diagnostics
+          {gt("Copy diagnostics")}
         </Button>
         {onAddRoute ? (
           <Button type="button" size="xs" variant="outline" onClick={onAddRoute}>
-            Add direct route
+            {gt("Add direct route")}
           </Button>
         ) : null}
       </div>

@@ -14,6 +14,7 @@ import { SnapShotShortcutKeys } from "../desktop/SnapShotShortcutKeys";
 import { Button } from "../ui/button";
 import { keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
 import { createRecordingRequestTracker } from "./SnapShotSettings.logic";
+import { useGT } from "gt-react";
 
 const MODIFIER_FROM_KEY: Readonly<Record<string, SnapShotModifier>> = {
   Shift: "shift",
@@ -47,6 +48,7 @@ export function useSnapShotShortcutRecorder({
   onStart?: () => void;
   onError: (message: string) => void;
 }) {
+  const gt = useGT();
   const bridge = getDesktopSnapShotBridge();
   const displayShortcut = shortcutLabel ? parseDesktopSnapShotShortcut(shortcutLabel) : shortcut;
   const [recording, setRecording] = useState(false);
@@ -128,7 +130,7 @@ export function useSnapShotShortcutRecorder({
         aria-label={
           displayShortcut
             ? `Record snapshot shortcut, currently ${formatSnapShotShortcutLabel(displayShortcut)}`
-            : "Change snapshot shortcut"
+            : gt("Change snapshot shortcut")
         }
         aria-pressed={recording}
         data-keybinding-capture=""
@@ -138,11 +140,11 @@ export function useSnapShotShortcutRecorder({
         onBlur={stopRecording}
       >
         {recording ? (
-          "Press shortcut…"
+          gt("Press shortcut…")
         ) : !displayShortcut ? (
-          "Change shortcut"
+          gt("Change shortcut")
         ) : !allowModifierPairs && isModifierPairShortcut(displayShortcut) ? (
-          "Choose shortcut"
+          gt("Choose shortcut")
         ) : (
           <SnapShotShortcutKeys shortcut={displayShortcut} />
         )}

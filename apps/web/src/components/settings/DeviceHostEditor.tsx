@@ -22,6 +22,7 @@ import {
   parseDeviceHostDraft,
   type DeviceHostCheckTarget,
 } from "./deviceHostConnectionChecks";
+import { useGT } from "gt-react";
 
 export function DeviceHostEditor({
   host,
@@ -75,6 +76,7 @@ function DeviceHostEditorForm({
   onSave: (host: SshDeviceHostConfig) => void;
   onClose: () => void;
 }) {
+  const gt = useGT();
   const [draft, setDraft] = useState(host);
   const [expandedChecks, setExpandedChecks] = useState<{ key: string; open: boolean } | null>(null);
   const { checks, testConnection } = useHostConnectionChecks(targets);
@@ -103,7 +105,7 @@ function DeviceHostEditorForm({
       }}
     >
       <DialogHeader>
-        <DialogTitle>{isNew ? "Add device host" : "Edit device host"}</DialogTitle>
+        <DialogTitle>{isNew ? gt("Add device host") : gt("Edit device host")}</DialogTitle>
         <DialogDescription>
           {targets.length === 1
             ? `Connect from ${targets[0]?.label}.`
@@ -113,7 +115,7 @@ function DeviceHostEditorForm({
       </DialogHeader>
       <DialogPanel>
         <label className="block space-y-1.5 text-sm">
-          <span>Name</span>
+          <span>{gt("Name")}</span>
           <Input
             autoFocus
             required
@@ -123,11 +125,11 @@ function DeviceHostEditorForm({
               const label = event.target.value;
               setDraft((current) => ({ ...current, label }));
             }}
-            placeholder="Mac mini"
+            placeholder={gt("Mac mini")}
           />
         </label>
         <label className="block space-y-1.5 text-sm">
-          <span>SSH target</span>
+          <span>{gt("SSH target")}</span>
           <Input
             required
             value={draft.target}
@@ -136,17 +138,17 @@ function DeviceHostEditorForm({
               const target = event.target.value;
               setDraft((current) => ({ ...current, target }));
             }}
-            placeholder="user@host or SSH alias"
+            placeholder={gt("user@host or SSH alias")}
           />
         </label>
         <details
           open={host.port !== undefined || host.identityFile !== undefined || undefined}
           className="text-sm"
         >
-          <summary className="cursor-pointer text-muted-foreground">SSH options</summary>
+          <summary className="cursor-pointer text-muted-foreground">{gt("SSH options")}</summary>
           <div className="mt-3 grid grid-cols-[minmax(0,1fr)_7rem] gap-3">
             <label className="block space-y-1.5">
-              <span>Identity file</span>
+              <span>{gt("Identity file")}</span>
               <Input
                 value={draft.identityFile ?? ""}
                 disabled={busy}
@@ -157,11 +159,11 @@ function DeviceHostEditorForm({
                     return identityFile ? { ...rest, identityFile } : rest;
                   });
                 }}
-                placeholder="SSH config default"
+                placeholder={gt("SSH config default")}
               />
             </label>
             <label className="block space-y-1.5">
-              <span>Port</span>
+              <span>{gt("Port")}</span>
               <Input
                 type="number"
                 min={1}
@@ -175,12 +177,12 @@ function DeviceHostEditorForm({
                     return port ? { ...rest, port: Number(port) } : rest;
                   });
                 }}
-                placeholder="Default"
+                placeholder={gt("Default")}
               />
             </label>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Optional. Resolved separately on each environment.
+            {gt("Optional. Resolved separately on each environment.")}
           </p>
         </details>
         <Collapsible
@@ -263,7 +265,7 @@ function DeviceHostEditorForm({
                     ) : null}
                     {result.status === "failed" ? (
                       <details className="mt-1.5 text-muted-foreground">
-                        <summary className="cursor-pointer">Show error</summary>
+                        <summary className="cursor-pointer">{gt("Show error")}</summary>
                         <p className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">
                           {result.error}
                         </p>
@@ -278,7 +280,7 @@ function DeviceHostEditorForm({
       </DialogPanel>
       <DialogFooter>
         <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
-          Cancel
+          {gt("Cancel")}
         </Button>
         <Button type="submit" disabled={busy || checking || !valid || !draft.label.trim()}>
           {busy ? <Spinner size="xs" /> : null} Save host

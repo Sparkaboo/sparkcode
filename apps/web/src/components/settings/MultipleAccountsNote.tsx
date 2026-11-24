@@ -4,6 +4,7 @@ import { InfoIcon } from "lucide-react";
 
 import { serverEnvironment } from "../../state/server";
 import { Alert, AlertDescription } from "../ui/alert";
+import { useGT } from "gt-react";
 
 const MULTIPLE_ACCOUNTS_FAQ_URL =
   "https://github.com/Sparkaboo/sparkcode/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
@@ -21,6 +22,7 @@ export function MultipleAccountsNote({
   readonly environmentId: EnvironmentId;
   readonly driver: ProviderDriverKind;
 }) {
+  const gt = useGT();
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const providerName = PROVIDER_NAMES.get(driver);
   const hasSignedInAccount =
@@ -41,7 +43,7 @@ export function MultipleAccountsNote({
             rel="noreferrer"
             className="underline underline-offset-2 hover:text-foreground"
           >
-            More info
+            {gt("More info")}
           </a>
         </p>
       </AlertDescription>

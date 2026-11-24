@@ -1,6 +1,7 @@
 import type { EnvironmentSpeechModel, SpeechBenchmarkTier } from "@t3tools/contracts";
 
 import { languageLabel } from "./SpeechLanguageSelect";
+import { useGT } from "gt-react";
 
 const commonLanguages = [
   "en",
@@ -55,6 +56,7 @@ export function ModelBenchmarks({
   /** Plain facts, such as language count and size, shown after the scores. */
   facts: readonly string[];
 }) {
+  const gt = useGT();
   const data = model.benchmark;
   const seconds = data?.secondsPer30s[tier];
   const visible = !data
@@ -77,7 +79,7 @@ export function ModelBenchmarks({
                 {score.errorPercent}% error)
               </>
             ) : (
-              "not benchmarked"
+              gt("not benchmarked")
             )}
           </span>
         );
@@ -85,9 +87,9 @@ export function ModelBenchmarks({
       <span>
         Speed:{" "}
         {tier === "cpu" && data && data.secondsPer30s.cpu === undefined ? (
-          "update server"
+          gt("update server")
         ) : seconds == null ? (
-          "not benchmarked"
+          gt("not benchmarked")
         ) : (
           <>
             <strong className="font-medium text-foreground">{seconds} s</strong> / 30 s

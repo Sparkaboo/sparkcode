@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { CheckIcon, ChevronRightIcon, LayersIcon } from "lucide-react";
 import * as Equal from "effect/Equal";
+import { msg, useGT, useMessages } from "gt-react";
 
 import { cn } from "../../lib/utils";
 import type { EnvironmentPresentation } from "../../state/environments";
@@ -32,35 +33,35 @@ interface InheritanceLayer {
 }
 
 const WRITING_STYLE_LABELS: Record<string, string> = {
-  repo_conventions: "Repository conventions",
-  conventional_commits: "Conventional Commits",
-  custom: "Custom instructions",
+  repo_conventions: msg("Repository conventions"),
+  conventional_commits: msg("Conventional Commits"),
+  custom: msg("Custom instructions"),
 };
 
 const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<string, string> = {
-  balanced: "Balanced",
-  performance: "Performance",
-  "battery-saver": "Battery saver",
-  custom: "Advanced",
+  balanced: msg("Balanced"),
+  performance: msg("Performance"),
+  "battery-saver": msg("Battery saver"),
+  custom: msg("Advanced"),
 };
 
 function formatValue(key: keyof ServerSettings, value: unknown): string {
   if (value === null || value === undefined) {
     return key === "pullRequestMergeMethod"
-      ? "Last selected"
+      ? msg("Last selected")
       : key === "sidebarAutoSettleAfterDays"
-        ? "Never"
+        ? msg("Never")
         : key === "defaultModelSelection"
-          ? "Automatic"
+          ? msg("Automatic")
           : key === "sourceControlWriterModelSelection"
-            ? "Text generation model"
+            ? msg("Text generation model")
             : key === "reviewGuideModelSelection"
-              ? "Source control writer model"
+              ? msg("Source control writer model")
               : key === "defaultThreadEnvMode" || key === "worktreeSubmodules"
-                ? "Inherit"
-                : "Not set";
+                ? msg("Inherit")
+                : msg("Not set");
   }
-  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (typeof value === "boolean") return value ? msg("On") : msg("Off");
   if (typeof value === "number") {
     return key === "sidebarAutoSettleAfterDays"
       ? `${value} ${value === 1 ? "day" : "days"}`
@@ -78,7 +79,7 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
         value as keyof typeof PULL_REQUEST_MERGE_METHOD_LABELS
       ];
     }
-    return value === "" ? "Empty" : value;
+    return value === "" ? msg("Empty") : value;
   }
   if (Array.isArray(value)) return `${value.length} ${value.length === 1 ? "item" : "items"}`;
   if (typeof value === "object") {
@@ -87,13 +88,13 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
     }
     if ("model" in value && typeof value.model === "string") return value.model;
     if ("mode" in value && typeof value.mode === "string") {
-      if (key === "worktreeCleanup") return value.mode === "off" ? "Off" : "Custom";
+      if (key === "worktreeCleanup") return value.mode === "off" ? msg("Off") : msg("Custom");
       return key === "sourceControlWritingStyle"
         ? (WRITING_STYLE_LABELS[value.mode] ?? value.mode)
         : value.mode;
     }
   }
-  return "Custom";
+  return msg("Custom");
 }
 
 /** Matches resolveProjectSettings order. */
@@ -110,8 +111,8 @@ export function settingInheritanceLayers(
   if (target.projectId !== null && isProjectScopedSettingKey(key)) {
     layers.push({
       key: "project",
-      label: "Project",
-      value: source === "project" ? formatValue(key, target.settings[key]) : "Inherits",
+      label: msg("Project"),
+      value: source === "project" ? formatValue(key, target.settings[key]) : msg("Inherits"),
       effective: source === "project",
       set: source === "project",
     });
@@ -119,7 +120,7 @@ export function settingInheritanceLayers(
   layers.push({
     key: "environment",
     label: target.label,
-    value: environmentSet ? formatValue(key, environmentValue) : "Inherits",
+    value: environmentSet ? formatValue(key, environmentValue) : msg("Inherits"),
     effective: source === "environment" && environmentSet,
     set: environmentSet,
   });
@@ -127,7 +128,7 @@ export function settingInheritanceLayers(
     layers.push({
       key: "t3.json",
       label: "t3.json",
-      value: source === "t3.json" ? formatValue(key, target.settings[key]) : "Inherits",
+      value: source === "t3.json" ? formatValue(key, target.settings[key]) : msg("Inherits"),
       effective: source === "t3.json",
       set: source === "t3.json",
     });
@@ -138,7 +139,7 @@ export function settingInheritanceLayers(
     : DEFAULT_SERVER_SETTINGS[key];
   layers.push({
     key: "built-in",
-    label: "Default",
+    label: msg("Default"),
     value: formatValue(key, builtIn),
     effective: source === "environment" && !environmentSet,
     set: true,
@@ -184,13 +185,23 @@ export function SettingInheritance({
   overridingProjects?: readonly SettingOverridingProject[];
   onClearOverrides?: (entries: readonly ProjectOverrideEntry[]) => void;
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const scopeContext = useOptionalSettingsScope();
   const key = keys[0];
   if (!key || targets.length === 0) return null;
   const hasMultipleEnvironments = new Set(targets.map((target) => target.environmentId)).size > 1;
   const overrideSummary =
     overridingProjects.length > 0
-      ? `${summary} · ${overridingProjects.length} project ${overridingProjects.length === 1 ? "override" : "overrides"}`
+      ? overridingProjects.length === 1
+        ? gt("{summary} · {count} project override", {
+            summary,
+            count: overridingProjects.length,
+          })
+        : gt("{summary} · {count} project overrides", {
+            summary,
+            count: overridingProjects.length,
+          })
       : summary;
   const chains = targets.flatMap((target) => {
     const environment = environments.find(
@@ -252,7 +263,9 @@ export function SettingInheritance({
                 <Button
                   size="icon-micro"
                   variant="ghost-muted"
-                  aria-label={`${overrideSummary}. Show where this value comes from`}
+                  aria-label={gt("{summary}. Show where this value comes from", {
+                    summary: overrideSummary,
+                  })}
                 />
               }
             />
@@ -290,7 +303,7 @@ export function SettingInheritance({
                         layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
                       )}
                     >
-                      {layer.key === "environment" ? "Environment" : layer.label}
+                      {layer.key === "environment" ? gt("Environment") : m(layer.label)}
                     </span>
                     <span
                       className={cn(
@@ -302,7 +315,7 @@ export function SettingInheritance({
                             : "text-muted-foreground/60",
                       )}
                     >
-                      <span className="max-w-32 truncate">{layer.value}</span>
+                      <span className="max-w-32 truncate">{m(layer.value)}</span>
                       {layer.effective ? (
                         <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
                       ) : (
@@ -339,12 +352,14 @@ export function SettingInheritance({
                       <span className="flex w-full min-w-0 flex-col">
                         <span className="flex min-w-0 items-center gap-2">
                           <span className="min-w-0 flex-1 truncate text-sm text-foreground tabular-nums">
-                            {winningLayer?.value}
+                            {winningLayer ? m(winningLayer.value) : null}
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {winningLayer?.key === "environment"
-                              ? "Environment"
-                              : winningLayer?.label}
+                              ? gt("Environment")
+                              : winningLayer
+                                ? m(winningLayer.label)
+                                : null}
                           </span>
                           <ChevronRightIcon
                             aria-hidden
@@ -377,7 +392,7 @@ export function SettingInheritance({
                     {chain}
                     {hasMultipleEnvironments ? (
                       <p className="px-2 pt-1.5 text-xs text-muted-foreground">
-                        Same on all machines
+                        {gt("Same on all machines")}
                       </p>
                     ) : null}
                   </>
@@ -396,14 +411,14 @@ export function SettingInheritance({
                             aria-hidden
                             className="size-3 [[data-panel-open]_&]:rotate-90"
                           />
-                          Overridden by
+                          {gt("Overridden by")}
                         </CollapsibleTrigger>
                       ) : (
-                        <span>Overridden by</span>
+                        <span>{gt("Overridden by")}</span>
                       )}
                       {onClearOverrides ? (
                         <InlineButton onClick={() => onClearOverrides(overriding)}>
-                          Reset {overriding.length === 1 ? "it" : "all"}
+                          {overriding.length === 1 ? gt("Reset it") : gt("Reset all")}
                         </InlineButton>
                       ) : null}
                     </div>
@@ -433,12 +448,14 @@ export function SettingInheritance({
                           </span>
                           <span className="max-w-32 truncate text-muted-foreground tabular-nums">
                             {isProjectScopedSettingKey(key)
-                              ? formatValue(
-                                  key,
-                                  members.find(
-                                    (member) =>
-                                      member.target.environmentId === project.environmentId,
-                                  )?.overrides[project.projectId]?.[key],
+                              ? m(
+                                  formatValue(
+                                    key,
+                                    members.find(
+                                      (member) =>
+                                        member.target.environmentId === project.environmentId,
+                                    )?.overrides[project.projectId]?.[key],
+                                  ),
                                 )
                               : null}
                           </span>

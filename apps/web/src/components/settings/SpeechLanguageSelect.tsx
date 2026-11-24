@@ -2,6 +2,7 @@ import type { EnvironmentSpeechStatus } from "@t3tools/contracts";
 import { effectiveSpeechLanguage } from "@t3tools/shared/speech";
 import { updateClientSettings, useClientSettings } from "../../hooks/useSettings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { useGT } from "gt-react";
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 export const languageLabel = (code: string) => languageNames.of(code) ?? code;
@@ -12,6 +13,7 @@ type ModelLanguages = Pick<
 >;
 
 export function SpeechLanguageSelect({ model }: { readonly model: ModelLanguages | null }) {
+  const gt = useGT();
   const preference = useClientSettings((settings) => settings.speechLanguage);
   const languages = model?.languages ?? [];
   const resolved = model
@@ -38,11 +40,11 @@ export function SpeechLanguageSelect({ model }: { readonly model: ModelLanguages
         if (value) void updateClientSettings({ speechLanguage: value });
       }}
     >
-      <SelectTrigger size="sm" aria-label="Transcription language" className="max-w-64">
+      <SelectTrigger size="sm" aria-label={gt("Transcription language")} className="max-w-64">
         <SelectValue>{label}</SelectValue>
       </SelectTrigger>
       <SelectPopup align="end" alignItemWithTrigger={false}>
-        <SelectItem value="auto">Auto</SelectItem>
+        <SelectItem value="auto">{gt("Auto")}</SelectItem>
         {unavailable ? (
           <SelectItem value={preference} disabled>
             {unavailable}

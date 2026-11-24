@@ -10,11 +10,12 @@ import { Button } from "../ui/button";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { useGT, msg } from "gt-react";
 
 const FAILURE_TITLES = {
-  install: "Could not install sparkcode",
-  uninstall: "Could not remove sparkcode",
-  addToPath: "Could not add sparkcode to PATH",
+  install: msg("Could not install sparkcode"),
+  uninstall: msg("Could not remove sparkcode"),
+  addToPath: msg("Could not add sparkcode to PATH"),
 } as const;
 
 /** The desktop `sparkcode` command's state, and its actions with a toast on failure. */
@@ -48,6 +49,7 @@ export function useDesktopCliCommand() {
 }
 
 export function CliCommandSettingsRow() {
+  const gt = useGT();
   const { state, busy, run } = useDesktopCliCommand();
 
   if (!state?.supported) return null;
@@ -70,7 +72,7 @@ export function CliCommandSettingsRow() {
         <div className="flex gap-2">
           {state.pathSetup && !state.pathSetup.added ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => run("addToPath")}>
-              Add to PATH
+              {gt("Add to PATH")}
             </Button>
           ) : null}
           <Button
@@ -79,7 +81,7 @@ export function CliCommandSettingsRow() {
             disabled={busy || (!installed && Boolean(state.shadowedBy))}
             onClick={() => run(installed ? "uninstall" : "install")}
           >
-            {installed ? "Remove" : "Install"}
+            {installed ? gt("Remove") : gt("Install")}
           </Button>
         </div>
       }

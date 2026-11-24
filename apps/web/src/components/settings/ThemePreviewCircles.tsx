@@ -12,6 +12,7 @@ import {
   type ThemeAppearance,
   type ThemeDefinition,
 } from "../../themePalette";
+import { useGT } from "gt-react";
 
 const THEME_PREVIEW_ROLES = [
   "sidebar",
@@ -159,6 +160,7 @@ export function ThemePreviewCircles({
   onSelectMode: (mode: ThemeMode) => void;
   previews: ThemeCardDefinition["previews"];
 }) {
+  const gt = useGT();
   return (
     <div className="flex min-h-16 items-center justify-center gap-2.5 px-3 pt-3">
       {previews.map((preview) => {
@@ -205,7 +207,7 @@ export function ThemePreviewCircles({
               }
             />
             <TooltipPopup>
-              {mode === "light" ? "Use for light mode only" : "Use for dark mode only"}
+              {mode === "light" ? gt("Use for light mode only") : gt("Use for dark mode only")}
             </TooltipPopup>
           </Tooltip>
         );

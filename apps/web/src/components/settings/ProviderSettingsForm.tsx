@@ -29,6 +29,83 @@ export type SettingsFormDefinition = Pick<ProviderClientDefinition, "settingsSch
   readonly driverKind?: ProviderClientDefinition["driverKind"];
 };
 import { SettingsRow } from "./settingsLayout";
+import { msg, useGT, useMessages } from "gt-react";
+
+/**
+ * Registers static labels, descriptions, placeholders, and select options coming from
+ * provider settings schemas in `@t3tools/contracts` and `@t3tools/provider-*` so `gt generate`
+ * extracts them and `useMessages()` translates them at render time.
+ */
+const _PROVIDER_SETTINGS_SCHEMA_MESSAGES = [
+  msg("ACP Registry"),
+  msg("ACP source"),
+  msg("API key"),
+  msg("Account-specific Codex home. Keeps auth.json separate while sharing state from CODEX_HOME."),
+  msg("Additional CLI arguments passed on session start."),
+  msg("Additional CLI arguments passed to codex app-server on session start."),
+  msg("Additional CLI arguments passed to pi --mode rpc on session start."),
+  msg("Agent Platform (Vertex AI)"),
+  msg("Agent identifier from the official ACP Registry, for example 'devin'."),
+  msg("Authentication method"),
+  msg("Auto-compact after"),
+  msg("Automatic"),
+  msg("Before the cache expires (beta)"),
+  msg("Binary path"),
+  msg("CLAUDE_CONFIG_DIR path"),
+  msg("CODEX_HOME path"),
+  msg("Compact after 100,000 to 1,000,000 tokens. Leave empty to use Claude's default."),
+  msg("Compact idle threads"),
+  msg("Custom ACP executable. Leave empty to select automatically."),
+  msg("Custom Claude home and config directory. Keeps .claude.json and .claude separate."),
+  msg("Custom Codex home and config directory."),
+  msg("Executable"),
+  msg("Executable name or path on this environment."),
+  msg(
+    "Executable on this environment. For registry agents, this overrides the distribution executable while keeping its arguments and environment.",
+  ),
+  msg("Executable override"),
+  msg("GCP location"),
+  msg("GCP project"),
+  msg("Gemini API key"),
+  msg("Gemini Enterprise"),
+  msg("Gemini or Vertex AI express key. Stored separately on the host."),
+  msg("Google account"),
+  msg("Google accounts use your subscription; API keys and Agent Platform bill usage."),
+  msg("Launch arguments"),
+  msg("Leave blank to let T3 Code spawn the server when needed."),
+  msg("Local command"),
+  msg("Never"),
+  msg("Optional"),
+  msg(
+    "Optional ACP authentication method ID. By default, the first agent-managed method is selected.",
+  ),
+  msg("Path to the Claude binary used by this instance."),
+  msg("Path to the Codex binary used by this instance."),
+  msg("Path to the Grok CLI binary."),
+  msg("Path to the Kiro CLI binary."),
+  msg("Path to the Muse Code binary on this environment. Sign in with muse login on that host."),
+  msg("Path to the OpenCode binary."),
+  msg("Path to the Pi coding agent binary."),
+  msg("Path to the fx binary. All fx instances on this machine share its fx login."),
+  msg("Region for Gemini Enterprise or Agent Platform."),
+  msg("Registry agent ID"),
+  msg("Registry default"),
+  msg("Required for Gemini Enterprise. Agent Platform uses it when no API key is set."),
+  msg("Server URL"),
+  msg("Server password"),
+  msg("Shadow home path"),
+  msg("Sign-in method"),
+  msg("Stored separately on the host."),
+  msg("Use default"),
+  msg(
+    "When to compact an idle thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Overrides the default in Providers > Advanced.",
+  ),
+  msg("When you return"),
+  msg("e.g. --chrome"),
+  msg("e.g. 300000"),
+  msg("e.g. dsh"),
+] as const;
+void _PROVIDER_SETTINGS_SCHEMA_MESSAGES;
 
 export interface ProviderSettingsFieldModel {
   readonly key: string;
@@ -220,6 +297,7 @@ function ProviderCommandArguments({
 }: Pick<ProviderSettingsFormProps, "value" | "onChange"> & {
   readonly managedReason: string | undefined;
 }) {
+  const gt = useGT();
   const args = configuredCommandArgs(value);
   const [storedDraft, setDraft] = useState(() => seedRowsDraft(args, toCommandArgumentRows));
   const draft = reconcileRowsDraft(storedDraft, args, commandArgumentsEqual, toCommandArgumentRows);
@@ -236,8 +314,8 @@ function ProviderCommandArguments({
 
   return (
     <SettingsRow
-      title="Arguments"
-      description="One literal argument per row, in launch order."
+      title={gt("Arguments")}
+      description={gt("One literal argument per row, in launch order.")}
       managed={managedReason}
       control={
         <Button
@@ -246,8 +324,7 @@ function ProviderCommandArguments({
           variant="outline"
           onClick={() => updateArguments([...rows, makeCommandArgumentDraftRow("")])}
         >
-          <PlusIcon />
-          Add argument
+          <PlusIcon /> {gt("Add argument")}{" "}
         </Button>
       }
     >
@@ -419,6 +496,7 @@ function ProviderSettingsSelect({
   readonly className?: string | undefined;
   readonly onChange: ProviderSettingsFormProps["onChange"];
 }) {
+  const m = useMessages();
   const options = field.options ?? [];
   const fallback = options[0]?.value ?? "";
   const current = readProviderConfigString(value, field.key) || fallback;
@@ -431,13 +509,13 @@ function ProviderSettingsSelect({
         onChange(nextProviderConfigWithFieldValue(value, field, next === fallback ? "" : next));
       }}
     >
-      <SelectTrigger id={inputId} size={size} className={className} aria-label={field.label}>
-        <SelectValue>{label}</SelectValue>
+      <SelectTrigger id={inputId} size={size} className={className} aria-label={m(field.label)}>
+        <SelectValue>{m(label)}</SelectValue>
       </SelectTrigger>
       <SelectPopup align="start" alignItemWithTrigger={false}>
         {options.map((option) => (
           <SelectItem key={option.value} value={option.value}>
-            {option.label}
+            {m(option.label)}
           </SelectItem>
         ))}
       </SelectPopup>
@@ -458,6 +536,8 @@ function ProviderSettingsTextInput({
   readonly descriptionId: string | undefined;
   readonly onChange: ProviderSettingsFormProps["onChange"];
 }) {
+  const gt = useGT();
+  const m = useMessages();
   const [rejected, setRejected] = useState<string | null>(null);
   return (
     <div className="flex w-full min-w-0 flex-col gap-1 @min-[32rem]/settings-row:w-56">
@@ -469,7 +549,7 @@ function ProviderSettingsTextInput({
         type={field.control === "password" ? "password" : undefined}
         autoComplete={field.control === "password" ? "off" : undefined}
         value={rejected ?? readProviderConfigString(value, field.key)}
-        placeholder={field.placeholder}
+        placeholder={field.placeholder ? m(field.placeholder) : undefined}
         onCommit={(next) => {
           const clears = field.clearWhenEmpty === "omit" && next.trim().length === 0;
           if (!clears && field.accepts?.(next) === false) {
@@ -483,7 +563,7 @@ function ProviderSettingsTextInput({
         spellCheck={false}
       />
       {rejected !== null ? (
-        <p className="text-2xs text-destructive">Enter a valid value. It was not saved.</p>
+        <p className="text-2xs text-destructive">{gt("Enter a valid value. It was not saved.")}</p>
       ) : null}
     </div>
   );
@@ -518,18 +598,23 @@ function ProviderSettingsFieldRow({
   managedReason,
   environmentId,
 }: ProviderSettingsFieldRowProps) {
+  const gt = useGT();
+  const m = useMessages();
+  const fieldLabel = m(field.label);
+  const fieldDescription = field.description ? m(field.description) : undefined;
+  const fieldPlaceholder = field.placeholder ? m(field.placeholder) : undefined;
   const inputId = `${idPrefix}-${field.key}`;
   const descriptionClassName =
     variant === "dialog"
       ? "text-2xs text-muted-foreground"
       : "mt-1 block text-xs text-muted-foreground";
-  const label = <span className="text-xs font-medium text-foreground">{field.label}</span>;
-  const description = field.description ? (
-    <span className={descriptionClassName}>{field.description}</span>
+  const label = <span className="text-xs font-medium text-foreground">{fieldLabel}</span>;
+  const description = fieldDescription ? (
+    <span className={descriptionClassName}>{fieldDescription}</span>
   ) : null;
 
   if (variant === "settings") {
-    const descriptionId = field.description ? `${inputId}-description` : undefined;
+    const descriptionId = fieldDescription ? `${inputId}-description` : undefined;
     const secretConfigured =
       field.secret === true && readProviderConfigString(value, field.key).length > 0;
     const control =
@@ -539,7 +624,7 @@ function ProviderSettingsFieldRow({
           onCheckedChange={(checked) =>
             onChange(nextProviderConfigWithFieldValue(value, field, Boolean(checked)))
           }
-          aria-label={field.label}
+          aria-label={fieldLabel}
           aria-describedby={descriptionId}
         />
       ) : field.control === "select" ? (
@@ -560,7 +645,7 @@ function ProviderSettingsFieldRow({
           onChange={(event) =>
             onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
           }
-          placeholder={field.placeholder}
+          placeholder={fieldPlaceholder}
           spellCheck={false}
         />
       ) : field.acceptsSecretReference && environmentId !== undefined ? (
@@ -589,7 +674,7 @@ function ProviderSettingsFieldRow({
               size="icon-sm"
               variant="ghost-destructive"
               onClick={() => onChange(nextProviderConfigWithFieldValue(value, field, ""))}
-              aria-label={`Clear ${field.label}`}
+              aria-label={gt("Clear {label}", { label: fieldLabel })}
             >
               <XIcon className="size-3.5" />
             </Button>
@@ -608,10 +693,10 @@ function ProviderSettingsFieldRow({
     return (
       <SettingsRow
         title={
-          field.control === "switch" ? field.label : <label htmlFor={inputId}>{field.label}</label>
+          field.control === "switch" ? fieldLabel : <label htmlFor={inputId}>{fieldLabel}</label>
         }
         description={
-          field.description ? <span id={descriptionId}>{field.description}</span> : undefined
+          fieldDescription ? <span id={descriptionId}>{fieldDescription}</span> : undefined
         }
         control={control}
         managed={managedReason}
@@ -632,7 +717,7 @@ function ProviderSettingsFieldRow({
             onCheckedChange={(checked) =>
               onChange(nextProviderConfigWithFieldValue(value, field, Boolean(checked)))
             }
-            aria-label={field.label}
+            aria-label={fieldLabel}
           />
         </div>
       </FieldFrame>
@@ -670,7 +755,7 @@ function ProviderSettingsFieldRow({
             onChange={(event) =>
               onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
             }
-            placeholder={field.placeholder}
+            placeholder={fieldPlaceholder}
             spellCheck={false}
           />
           {description}
@@ -695,7 +780,7 @@ function ProviderSettingsFieldRow({
             autoComplete={!field.secret && field.control === "password" ? "off" : undefined}
             value={readProviderConfigString(value, field.key)}
             onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
-            placeholder={field.placeholder}
+            placeholder={fieldPlaceholder}
             spellCheck={false}
           />
         ) : (
@@ -707,7 +792,7 @@ function ProviderSettingsFieldRow({
             onChange={(event) =>
               onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
             }
-            placeholder={field.placeholder}
+            placeholder={fieldPlaceholder}
             spellCheck={false}
           />
         )}

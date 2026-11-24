@@ -27,6 +27,7 @@ import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic"
 import { ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { providerClients } from "./providerDriverMeta";
+import { useGT } from "gt-react";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
@@ -137,6 +138,7 @@ export function AcpRegistrySearchStep({
   onManualConfiguration,
   onLocalConfiguration,
 }: AcpRegistrySearchStepProps) {
+  const gt = useGT();
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const { query, search, preparingId, prepareError } = registry;
 
@@ -158,7 +160,7 @@ export function AcpRegistrySearchStep({
   return (
     <section className="grid gap-3" aria-labelledby="acp-registry-search-heading">
       <h3 className="sr-only" id="acp-registry-search-heading">
-        Choose an agent
+        {gt("Choose an agent")}
       </h3>
 
       <form className="flex flex-wrap items-center gap-2" onSubmit={handleSearch}>
@@ -167,10 +169,10 @@ export function AcpRegistrySearchStep({
             <SearchIcon />
           </InputGroupAddon>
           <InputGroupInput
-            aria-label="Search ACP Registry"
+            aria-label={gt("Search ACP Registry")}
             disabled={preparingId !== null}
             onChange={(event) => registry.type(event.currentTarget.value)}
-            placeholder="Search agents…"
+            placeholder={gt("Search agents…")}
             size="sm"
             type="search"
             value={query}
@@ -183,7 +185,7 @@ export function AcpRegistrySearchStep({
           type="button"
           variant="ghost-muted"
         >
-          Enter manually
+          {gt("Enter manually")}
         </Button>
         {onLocalConfiguration ? (
           <Button
@@ -193,16 +195,16 @@ export function AcpRegistrySearchStep({
             type="button"
             variant="outline"
           >
-            Local ACP command
+            {gt("Local ACP command")}
           </Button>
         ) : null}
       </form>
 
       <div className="sr-only" role="status">
         {isInitialSearch
-          ? "Searching the ACP Registry."
+          ? gt("Searching the ACP Registry.")
           : isRefreshing
-            ? "Refreshing ACP Registry results."
+            ? gt("Refreshing ACP Registry results.")
             : results
               ? `${resultCount} compatible ${resultCount === 1 ? "agent" : "agents"} found.`
               : ""}
@@ -216,15 +218,15 @@ export function AcpRegistrySearchStep({
 
       {isInitialSearch ? (
         <div className="flex min-h-20 items-center justify-center text-sm text-muted-foreground">
-          Searching the registry...
+          {gt("Searching the registry...")}
         </div>
       ) : null}
 
       {results ? (
         results.length === 0 ? (
           <div className="flex min-h-28 flex-col items-center justify-center rounded-2xl border border-dashed px-4 text-center">
-            <p className="text-sm font-medium">No compatible agents found</p>
-            <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
+            <p className="text-sm font-medium">{gt("No compatible agents found")}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{gt("Try a broader search.")}</p>
           </div>
         ) : (
           <ScrollArea scrollFade className="max-h-64">
@@ -260,6 +262,7 @@ function AcpRegistryAgentRow({
   readonly isPreparing: boolean;
   readonly onAdd: (agent: AcpRegistrySearchAgent) => void;
 }) {
+  const gt = useGT();
   const progressLabel = agent.distribution === "binary" ? "Downloading" : "Preparing";
   const aboutUrl = agent.website || agent.repository;
   return (
@@ -307,7 +310,7 @@ function AcpRegistryAgentRow({
             size="xs"
             variant={isPreparing ? "secondary" : "outline"}
           >
-            {alreadyAdded ? "Added" : isPreparing ? progressLabel : "Add"}
+            {alreadyAdded ? gt("Added") : isPreparing ? progressLabel : gt("Add")}
           </Button>
         </div>
       </div>

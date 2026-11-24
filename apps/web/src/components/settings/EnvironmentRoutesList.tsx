@@ -36,6 +36,7 @@ import { usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useGT } from "gt-react";
 
 export function EnvironmentRoutesList({
   environment,
@@ -44,6 +45,7 @@ export function EnvironmentRoutesList({
   readonly environment: EnvironmentPresentation;
   readonly onAddRoute: () => void;
 }) {
+  const gt = useGT();
   const saved = connectionRoutes(environment.entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
@@ -117,8 +119,7 @@ export function EnvironmentRoutesList({
       </DndContext>
       <div className="-ml-1.5 pt-1">
         <Button size="xs" variant="ghost-muted" onClick={onAddRoute}>
-          <PlusIcon className="size-3" />
-          Add route
+          <PlusIcon className="size-3" /> {gt("Add route")}{" "}
         </Button>
       </div>
     </div>
@@ -138,6 +139,7 @@ function SortableRouteRow({
   readonly removable: boolean;
   readonly onRemove: () => void;
 }) {
+  const gt = useGT();
   const id = connectionRouteId(route.target);
   const label = connectionRouteLabel(route);
   const address = connectionRouteAddress(route);
@@ -165,14 +167,14 @@ function SortableRouteRow({
           {label}
           {inUse ? (
             <span className="rounded-sm bg-success/12 px-1 text-2xs font-normal text-success-foreground">
-              In use
+              {gt("In use")}
             </span>
           ) : null}
         </p>
         {address !== null ? (
           <p className="truncate text-2xs text-muted-foreground">
             {address}
-            {isLearned(route) ? " · found automatically" : ""}
+            {isLearned(route) ? gt(" · found automatically") : ""}
           </p>
         ) : null}
       </div>
@@ -201,7 +203,7 @@ function SortableRouteRow({
           >
             <XIcon className="size-3" />
           </TooltipTrigger>
-          <TooltipPopup side="top">Remove route</TooltipPopup>
+          <TooltipPopup side="top">{gt("Remove route")}</TooltipPopup>
         </Tooltip>
       ) : null}
     </li>

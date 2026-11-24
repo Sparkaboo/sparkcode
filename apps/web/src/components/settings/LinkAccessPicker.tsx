@@ -3,6 +3,7 @@ import { useId } from "react";
 
 import { accessConfig } from "../auth/ConnectAgentSurface";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { useGT } from "gt-react";
 
 /** What agents here may do in an environment being linked, with what that does not allow. */
 export function LinkAccessPicker({
@@ -14,12 +15,13 @@ export function LinkAccessPicker({
   readonly onChange: (access: AuthMcpClientAccess) => void;
   readonly disabled?: boolean;
 }) {
+  const gt = useGT();
   const labelId = useId();
   const selected = accessConfig[value];
   return (
     <div className="space-y-1.5">
       <span id={labelId} className="block text-xs font-medium">
-        What agents here may do there
+        {gt("What agents here may do there")}
       </span>
       <Select
         value={value}

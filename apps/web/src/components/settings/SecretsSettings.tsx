@@ -27,6 +27,7 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { useGT } from "gt-react";
 
 const SECRET_PROVIDER_KINDS: Readonly<
   Record<string, { readonly name: string; readonly icon: Icon }>
@@ -35,6 +36,7 @@ const SECRET_PROVIDER_KINDS: Readonly<
 };
 
 export function SecretsSettingsPanel() {
+  const gt = useGT();
   const { scope, environment } = useSettingsScope();
   const connected = environment?.connection.phase === "connected";
   return (
@@ -56,7 +58,9 @@ export function SecretsSettingsPanel() {
       ) : (
         <SettingsSection {...searchableSetting("secret-providers")}>
           <p className="px-4 py-3 text-sm text-muted-foreground">
-            Connect an environment to manage the secret providers its provider variables read from.
+            {gt(
+              "Connect an environment to manage the secret providers its provider variables read from.",
+            )}
           </p>
         </SettingsSection>
       )}
@@ -71,6 +75,7 @@ function EnvironmentSecretProviders({
   readonly environment: EnvironmentPresentation;
   readonly projectScoped: boolean;
 }) {
+  const gt = useGT();
   const environmentId = environment.environmentId;
   const sessionState = useEnvironmentSessionState(environmentId);
   // The server requires the same grant for secret providers as for provider settings.
@@ -102,21 +107,22 @@ function EnvironmentSecretProviders({
         headerAction={
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
-              <PlusIcon className="size-3" aria-hidden />
-              Add provider
+              <PlusIcon className="size-3" aria-hidden /> {gt("Add provider")}{" "}
             </Button>
           ) : null
         }
       >
         {projectScoped ? (
           <p className="px-4 pt-3 text-xs text-muted-foreground">
-            Environment-wide setting. Select an environment to change it.
+            {gt("Environment-wide setting. Select an environment to change it.")}
           </p>
         ) : null}
         {entries.length === 0 ? (
           <SettingsRow
-            title="No secret providers configured."
-            description="Add a 1Password account, then pick it as the source of a provider variable."
+            title={gt("No secret providers configured.")}
+            description={gt(
+              "Add a 1Password account, then pick it as the source of a provider variable.",
+            )}
           />
         ) : (
           entries.map(([id, config]) => {
@@ -161,7 +167,7 @@ function EnvironmentSecretProviders({
                           variant="ghost"
                           onClick={() => setDialog({ mode: "edit", id })}
                         >
-                          Edit
+                          {gt("Edit")}
                         </Button>
                       ) : null}
                       <RemoveSecretProviderButton
@@ -202,11 +208,12 @@ function RemoveSecretProviderButton({
   readonly label: string;
   readonly onConfirm: () => void;
 }) {
+  const gt = useGT();
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button size="xs" variant="ghost" onClick={() => setOpen(true)}>
-        Remove
+        {gt("Remove")}
       </Button>
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogPopup>
@@ -215,7 +222,9 @@ function RemoveSecretProviderButton({
             <SecretProviderUses environmentId={environmentId} id={id} label={label} />
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              {gt("Cancel")}
+            </AlertDialogClose>
             <Button
               variant="destructive"
               onClick={() => {
@@ -223,7 +232,7 @@ function RemoveSecretProviderButton({
                 onConfirm();
               }}
             >
-              Remove provider
+              {gt("Remove provider")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

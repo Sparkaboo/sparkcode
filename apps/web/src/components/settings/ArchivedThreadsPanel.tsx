@@ -22,6 +22,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 
 import { useRef, useState } from "react";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
+import { useGT } from "gt-react";
 
 const ARCHIVE_ACTIONS = [
   { action: "unarchive", label: "Unarchive", Icon: ArchiveX },
@@ -30,6 +31,7 @@ const ARCHIVE_ACTIONS = [
 type ArchiveAction = (typeof ARCHIVE_ACTIONS)[number]["action"];
 
 export function ArchivedThreadsPanel() {
+  const gt = useGT();
   const { scope, groups: projectGroups, environments } = useSettingsScope();
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const pendingActionsRef = useRef(new Set<string>());
@@ -202,16 +204,16 @@ export function ArchivedThreadsPanel() {
                   <ArchiveIcon className="size-3.5 text-muted-foreground" />
                 )}
                 {isLoadingArchive
-                  ? "Loading archived threads"
+                  ? gt("Loading archived threads")
                   : archiveError
-                    ? "Could not load archived threads"
-                    : "No archived threads"}
+                    ? gt("Could not load archived threads")
+                    : gt("No archived threads")}
               </span>
             }
             description={
               isLoadingArchive
-                ? "Checking connected environments."
-                : (archiveError ?? "Archived threads will appear here.")
+                ? gt("Checking connected environments.")
+                : (archiveError ?? gt("Archived threads will appear here."))
             }
           />
         </SettingsSection>
@@ -237,7 +239,7 @@ export function ArchivedThreadsPanel() {
                     <span className={hasMultipleEnvironments ? "block truncate" : undefined}>
                       {hasMultipleEnvironments ? `${thread.environmentLabel} · ` : null}
                       Archived <RelativeTime timestamp={thread.archivedAt ?? thread.createdAt} />
-                      {" \u00b7 Created "}
+                      {gt(" · Created ")}
                       <RelativeTime timestamp={thread.createdAt} />
                     </span>
                   }

@@ -4,6 +4,7 @@ import { GhosttyTerminalSurface } from "../../terminal/ghostty/surface";
 import { ensureLocalApi } from "../../localApi";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { terminalThemeFromApp } from "../ThreadTerminalDrawer";
+import { useGT } from "gt-react";
 
 export default function ProviderAuthTerminal({
   output,
@@ -14,6 +15,7 @@ export default function ProviderAuthTerminal({
   readonly outputOffset?: number | undefined;
   readonly onResponse: (response: Extract<ProviderAuthResponse, { type: "terminal" }>) => void;
 }) {
+  const gt = useGT();
   const [surface, setSurface] = useState<GhosttyTerminalSurface | null>(null);
   const written = useRef(0);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export default function ProviderAuthTerminal({
     <>
       <div
         ref={mountSurface}
-        aria-label="Provider sign-in terminal"
+        aria-label={gt("Provider sign-in terminal")}
         className="relative h-64 overflow-hidden rounded-md border border-border"
       />
       {error ? (

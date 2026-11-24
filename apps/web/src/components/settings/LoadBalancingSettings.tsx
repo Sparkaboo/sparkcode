@@ -11,6 +11,7 @@ import { Switch } from "../ui/switch";
 import { EnvironmentRow, EnvironmentTransportLabel } from "./EnvironmentRow";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { searchableSetting } from "./settingsSearch";
+import { useGT } from "gt-react";
 
 const preferences = [
   { value: 100, label: "Prefer" },
@@ -49,6 +50,7 @@ export function LoadBalancingSettings({
 }: {
   environments: ReadonlyArray<EnvironmentPresentation>;
 }) {
+  const gt = useGT();
   const settings = useClientSettings((current) => ({
     loadBalancingEnabled: current.loadBalancingEnabled,
     loadBalancingWeights: current.loadBalancingWeights,
@@ -69,7 +71,7 @@ export function LoadBalancingSettings({
       }
       control={
         <Switch
-          aria-label="Automatically balance load"
+          aria-label={gt("Automatically balance load")}
           checked={settings.loadBalancingEnabled}
           disabled={!settingsHydrated}
           onCheckedChange={(loadBalancingEnabled) => updateClientSettings({ loadBalancingEnabled })}
@@ -77,8 +79,9 @@ export function LoadBalancingSettings({
       }
     >
       <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
-        New threads in shared projects start on the machine with the most free CPU and memory,
-        weighted by each machine's preference.
+        {gt(
+          "New threads in shared projects start on the machine with the most free CPU and memory, weighted by each machine's preference.",
+        )}
       </p>
       {environments.map((environment) => (
         <EnvironmentRow

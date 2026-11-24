@@ -49,11 +49,12 @@ import {
 } from "@t3tools/client-runtime/thread-pull-requests";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+import { msg } from "gt-react";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
-  merge: "Merge",
-  squash: "Squash and merge",
-  rebase: "Rebase and merge",
+  merge: msg("Merge"),
+  squash: msg("Squash and merge"),
+  rebase: msg("Rebase and merge"),
 };
 
 export function allowsSinglePullRequestMerge(input: {

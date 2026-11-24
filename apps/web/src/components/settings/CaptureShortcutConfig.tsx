@@ -19,6 +19,7 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { shortcutToKeybindingInput } from "./KeybindingsSettings.logic";
 import { useSnapShotShortcutRecorder } from "./useSnapShotShortcutRecorder";
+import { useGT } from "gt-react";
 
 const DEFAULT_SHORTCUT = parseKeybindingShortcut("Ctrl+Shift+2")!;
 
@@ -35,6 +36,7 @@ export function CaptureShortcutConfig({
   onSaved?: () => Promise<unknown>;
   onComplete?: () => Promise<void>;
 }) {
+  const gt = useGT();
   const bridge = getDesktopSnapShotBridge();
   const resolvedTheme = useRenderedAppearance();
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -121,7 +123,7 @@ export function CaptureShortcutConfig({
       if (!applied.warning && preview.operation === "install" && onComplete) {
         toastManager.add({
           type: "success",
-          title: "Shortcut saved",
+          title: gt("Shortcut saved"),
           description: `Use ${preview.shortcut} from another app.`,
         });
         await onComplete();
@@ -142,21 +144,21 @@ export function CaptureShortcutConfig({
     <div className="space-y-4 text-sm">
       {!result ? (
         <div className="flex items-center justify-between gap-3">
-          <span>Shortcut</span>
+          <span>{gt("Shortcut")}</span>
           {recorder.input}
         </div>
       ) : null}
       {recorder.recording ? (
         <p role="status" className="text-xs text-muted-foreground">
-          Press your shortcut. Esc cancels.
+          {gt("Press your shortcut. Esc cancels.")}
         </p>
       ) : null}
       {result ? (
         <p role="status">
           {result.warning
-            ? "Saved, but the shortcut needs attention. Check Advanced for help."
+            ? gt("Saved, but the shortcut needs attention. Check Advanced for help.")
             : preview?.operation === "remove"
-              ? "Shortcut removed."
+              ? gt("Shortcut removed.")
               : `Use ${preview?.shortcut} from another app to capture a window.`}
         </p>
       ) : preview ? (
@@ -164,16 +166,16 @@ export function CaptureShortcutConfig({
           <p className="text-muted-foreground">
             {changed
               ? preview.operation === "remove"
-                ? "Review the change below to remove your shortcut."
-                : "Review the change below, then save your shortcut."
+                ? gt("Review the change below to remove your shortcut.")
+                : gt("Review the change below, then save your shortcut.")
               : preview.operation === "remove"
-                ? "There's no capture shortcut to remove."
-                : "This shortcut is already set up."}
+                ? gt("There's no capture shortcut to remove.")
+                : gt("This shortcut is already set up.")}
           </p>
           {diff ? (
             <div
               className="max-h-80 overflow-auto rounded-lg border text-xs"
-              aria-label="Shortcut changes"
+              aria-label={gt("Shortcut changes")}
             >
               <FileDiff
                 fileDiff={diff}
@@ -188,7 +190,7 @@ export function CaptureShortcutConfig({
           ) : null}
           {changed ? (
             <p className="text-xs text-muted-foreground">
-              Only these changes will be saved. We'll keep a backup.
+              {gt("Only these changes will be saved. We'll keep a backup.")}
             </p>
           ) : null}
           <div className="flex gap-2">
@@ -202,31 +204,32 @@ export function CaptureShortcutConfig({
                 onClick={() => void apply()}
               >
                 {working === "writing"
-                  ? "Saving…"
+                  ? gt("Saving…")
                   : changed
                     ? preview.operation === "install"
-                      ? "Save shortcut"
-                      : "Remove shortcut"
-                    : "Done"}
+                      ? gt("Save shortcut")
+                      : gt("Remove shortcut")
+                    : gt("Done")}
               </Button>
             ) : null}
             <Button variant="ghost" disabled={actionBusy} onClick={() => setPreview(null)}>
-              Cancel
+              {gt("Cancel")}
             </Button>
           </div>
         </>
       ) : (
         <>
           <p className="text-muted-foreground">
-            Allow SparkCode to read your desktop settings. You'll review any changes here before
-            saving.
+            {gt(
+              "Allow SparkCode to read your desktop settings. You'll review any changes here before saving.",
+            )}
           </p>
           <Button
             disabled={actionBusy || !bridge}
             aria-busy={working === "reading"}
             onClick={() => void read()}
           >
-            {working === "reading" ? "Preparing changes…" : "Review changes"}
+            {working === "reading" ? gt("Preparing changes…") : gt("Review changes")}
           </Button>
         </>
       )}
@@ -238,29 +241,32 @@ export function CaptureShortcutConfig({
       {state.shortcutActionRegistered === false && state.shortcutMessage ? (
         <p role="status" className="text-muted-foreground">
           {state.shortcutPending
-            ? "Connecting to your desktop…"
-            : "Restart SparkCode to finish connecting your shortcut."}
+            ? gt("Connecting to your desktop…")
+            : gt("Restart SparkCode to finish connecting your shortcut.")}
         </p>
       ) : null}
       <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Advanced</summary>
+        <summary className="cursor-pointer">{gt("Advanced")}</summary>
         <div className="mt-3 space-y-3">
           {error?.detail || result?.warning ? (
             <div className="space-y-1">
-              <p className="font-medium text-foreground">Troubleshooting</p>
+              <p className="font-medium text-foreground">{gt("Troubleshooting")}</p>
               <p className="break-words">{error?.detail ?? result?.warning}</p>
             </div>
           ) : null}
           <div className="space-y-1">
-            <p className="font-medium text-foreground">Settings file</p>
+            <p className="font-medium text-foreground">{gt("Settings file")}</p>
             <p className="break-all font-mono">
               {preview?.path ??
                 state.shortcutConfigPath ??
                 (niri ? "~/.config/niri/config.kdl" : "~/.config/hypr/hyprland.conf")}
             </p>
-            {niri ? <p>SparkCode also reads any files included by this file.</p> : null}
+            {niri ? <p>{gt("SparkCode also reads any files included by this file.")}</p> : null}
             {preview && preview.resolvedPath !== preview.path ? (
-              <p className="break-all">Linked to {preview.resolvedPath}. The link will be kept.</p>
+              <p className="break-all">
+                Linked to {preview.resolvedPath}
+                {gt(". The link will be kept.")}
+              </p>
             ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -270,7 +276,7 @@ export function CaptureShortcutConfig({
               disabled={actionBusy || !bridge}
               onClick={() => void read(true)}
             >
-              Choose a different file…
+              {gt("Choose a different file…")}
             </Button>
             <Button
               size="sm"
@@ -278,7 +284,7 @@ export function CaptureShortcutConfig({
               disabled={actionBusy || !bridge}
               onClick={() => void read(customFile, "remove")}
             >
-              Remove shortcut…
+              {gt("Remove shortcut…")}
             </Button>
             {result ? (
               <Button
@@ -287,22 +293,22 @@ export function CaptureShortcutConfig({
                 disabled={actionBusy || !bridge}
                 onClick={() => void read()}
               >
-                Review changes
+                {gt("Review changes")}
               </Button>
             ) : null}
           </div>
           <p>
             Use your desktop's shortcut settings file.{" "}
             {niri
-              ? "A custom --config or NIRI_CONFIG can change its location."
-              : "On Omarchy, use your own bindings file, not its defaults."}
+              ? gt("A custom --config or NIRI_CONFIG can change its location.")
+              : gt("On Omarchy, use your own bindings file, not its defaults.")}
           </p>
           {result?.backupPath ? <p className="break-all">Backup: {result.backupPath}</p> : null}
-          <p className="font-medium text-foreground">Manual setup</p>
+          <p className="font-medium text-foreground">{gt("Manual setup")}</p>
           <p>
             {niri
               ? "Paste this inside binds { … } in your Niri config, then save."
-              : "Add this binding to your Hyprland config, then save."}{" "}
+              : gt("Add this binding to your Hyprland config, then save.")}{" "}
             Change the keys if needed.
           </p>
           <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-muted/50 p-3">
@@ -316,7 +322,7 @@ export function CaptureShortcutConfig({
               if (state.shortcutBinding) copyToClipboard(state.shortcutBinding);
             }}
           >
-            {isCopied ? "Copied" : "Copy shortcut"}
+            {isCopied ? gt("Copied") : gt("Copy shortcut")}
           </Button>
           <p>
             Turn capture off in SparkCode to stop it. Remove the shortcut from {desktop} to free up
@@ -332,7 +338,7 @@ export function CaptureShortcutConfig({
               disabled={actionBusy || state.shortcutActionRegistered === false}
               onClick={() => void onComplete()}
             >
-              I've added the shortcut
+              {gt("I've added the shortcut")}
             </Button>
           ) : null}
         </div>

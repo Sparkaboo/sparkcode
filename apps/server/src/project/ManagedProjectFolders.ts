@@ -195,7 +195,7 @@ function namedProjectReadme(name: string): string {
     "",
     `# ${name}`,
     "",
-    "Created in [SparkCode](https://github.com/Sparkaboo/sparkcode).",
+    "Created in [SparkCode](https://github.com/fyrko-labs/sparkcode).",
     "",
   ].join("\n");
 }

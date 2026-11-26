@@ -74,12 +74,12 @@
 
 ## Download SparkCode
 
-Desktop installers and standalone CLI binaries are available on [SparkCode Releases](https://github.com/Sparkaboo/sparkcode/releases/latest) for macOS (Apple Silicon & Intel), Windows (x64 & arm64), and Linux (x64 & arm64). When upgrading from a locally built `0.1.9` build for the first time, please install the new package manually.
+Desktop installers and standalone CLI binaries are available on [SparkCode Releases](https://github.com/fyrko-labs/sparkcode/releases/latest) for macOS (Apple Silicon & Intel), Windows (x64 & arm64), and Linux (x64 & arm64). When upgrading from a locally built `0.1.9` build for the first time, please install the new package manually.
 
 Install the CLI on macOS (Apple Silicon) and Linux with:
 
 ```sh
-curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.sh | sh
 ```
 
 On Windows, run the `install.ps1` script from the release page in PowerShell. Verify installation with `sparkcode --version`.

@@ -27,7 +27,7 @@ it.effect("reads the SparkCode version and migration head from the matching rele
     yield* Effect.flip(service.get({ spec: "../other" }));
     expect(urls.map(String)).toEqual(
       ["latest/download", "download/v1.2.0", "download/v9.9.9", "download/v1.2.1"].map(
-        (path) => `https://github.com/Sparkaboo/sparkcode/releases/${path}/sparkcode-release.json`,
+        (path) => `https://github.com/fyrko-labs/sparkcode/releases/${path}/sparkcode-release.json`,
       ),
     );
   }),

@@ -2,7 +2,7 @@
 # Installs the SparkCode CLI from a GitHub Release archive. Needs only sh, tar,
 # sha256sum or shasum, and curl or wget; no Node, npm, or compiler.
 #
-#   curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.sh | sh
 #
 # Environment:
 #   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
@@ -17,7 +17,7 @@
 # instead of fetching the release again.
 set -eu
 
-repo="Sparkaboo/sparkcode"
+repo="fyrko-labs/sparkcode"
 base_url="${T3CODE_RELEASE_BASE_URL:-https://github.com/${repo}/releases/download}"
 t3_home="${T3CODE_HOME:-$HOME/.sparkcode}"
 case "$t3_home" in
@@ -171,7 +171,7 @@ case "$(uname -m)" in
   *) fail "unsupported architecture $(uname -m)" ;;
 esac
 if [ "${platform}-${arch}" = darwin-x64 ]; then
-  fail "there is no SparkCode CLI for Intel Macs. Install the desktop app from https://github.com/Sparkaboo/sparkcode/releases/latest, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
+  fail "there is no SparkCode CLI for Intel Macs. Install the desktop app from https://github.com/fyrko-labs/sparkcode/releases/latest, or run a server from source: https://github.com/${repo}/blob/main/docs/user/install.md#intel-macs"
 fi
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 if command -v sha256sum >/dev/null 2>&1; then

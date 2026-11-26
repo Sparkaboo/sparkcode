@@ -69,10 +69,10 @@ describe("desktop update UI helpers", () => {
     "falls back to upstream for an invalid configured repository: %s",
     (repository) => {
       expect(getDesktopUpdateReleaseHistoryUrl(repository)).toBe(
-        "https://github.com/Sparkaboo/sparkcode/releases",
+        "https://github.com/fyrko-labs/sparkcode/releases",
       );
       expect(getDesktopUpdateReleaseUrl("1.2.3", repository)).toBe(
-        "https://github.com/Sparkaboo/sparkcode/releases/tag/v1.2.3",
+        "https://github.com/fyrko-labs/sparkcode/releases/tag/v1.2.3",
       );
     },
   );

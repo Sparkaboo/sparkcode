@@ -16,9 +16,9 @@ export function InstallT3Commands({
   return (
     <div className={cn("space-y-2", className)}>
       <p className="text-xs text-muted-foreground">macOS, Linux</p>
-      <CommandBlock command="curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh" />
+      <CommandBlock command="curl -fsSL https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.sh | sh" />
       <p className="text-xs text-muted-foreground">Windows (PowerShell)</p>
-      <CommandBlock command="irm https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.ps1 | iex" />
+      <CommandBlock command="irm https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.ps1 | iex" />
       <p className="text-xs text-muted-foreground">Then</p>
       <CommandBlock command={command} />
       <p className="text-xs text-muted-foreground">

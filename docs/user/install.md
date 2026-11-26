@@ -11,13 +11,13 @@ launch SparkCode and configure providers afterwards.
 ## Command line
 
 ```bash
-curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.ps1 | iex
+irm https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.ps1 | iex
 ```
 
 This installs the `sparkcode` binary to `~/.local/bin`. If that folder is not on your
@@ -52,7 +52,7 @@ run a server there, build it from source with `vp`, which provides the Node vers
 ([Install vp](../operations/development.md#first-checkout)):
 
 ```bash
-git clone https://github.com/Sparkaboo/sparkcode
+git clone https://github.com/fyrko-labs/sparkcode
 cd sparkcode && vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
@@ -62,7 +62,7 @@ update it with `git pull` and a rebuild.
 
 ## Desktop app
 
-Download the DMG, Windows installer, AppImage or Debian package for your architecture from [SparkCode Releases](https://github.com/Sparkaboo/sparkcode/releases/latest). Install the first public desktop release manually if you have a local 0.1.9 build.
+Download the DMG, Windows installer, AppImage or Debian package for your architecture from [SparkCode Releases](https://github.com/fyrko-labs/sparkcode/releases/latest). Install the first public desktop release manually if you have a local 0.1.9 build.
 
 ### Linux
 

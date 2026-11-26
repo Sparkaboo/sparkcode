@@ -539,7 +539,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
-          owner: "Sparkaboo",
+          owner: "fyrko-labs",
           repo: "sparkcode",
           releaseType: "release",
         },
@@ -564,7 +564,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "Sparkaboo/sparkcode" } }),
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "fyrko-labs/sparkcode" } }),
         ),
       ),
     ),

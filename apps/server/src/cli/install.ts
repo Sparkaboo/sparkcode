@@ -52,8 +52,8 @@ export const installCli = Effect.fn("cli.install.install")(function* () {
   const windows = platform === "win32";
   if (Option.isNone(runtime)) {
     const script = windows
-      ? "irm https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.ps1 | iex"
-      : "curl -fsSL https://github.com/Sparkaboo/sparkcode/releases/latest/download/install.sh | sh";
+      ? "irm https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.ps1 | iex"
+      : "curl -fsSL https://github.com/fyrko-labs/sparkcode/releases/latest/download/install.sh | sh";
     return yield* new CliInstallError({
       reason: `Only the standalone SparkCode CLI can install itself. Use \`${script}\`, or Settings in the desktop app.`,
     });

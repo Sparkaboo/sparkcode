@@ -73,10 +73,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer chan
       if (failures-- > 0) return response.writeHead(504).end();
       const url = new URL(request.url ?? "/", "http://fixture");
       const body =
-        url.pathname === "/Sparkaboo/sparkcode/releases/latest" &&
+        url.pathname === "/fyrko-labs/sparkcode/releases/latest" &&
         request.headers.accept === "application/json"
           ? { tag_name: "v1.2.3" }
-          : url.pathname === "/repos/Sparkaboo/sparkcode/releases"
+          : url.pathname === "/repos/fyrko-labs/sparkcode/releases"
             ? { "1": nightlies, "2": [{ tag_name: `v${version}` }, { tag_name: "v1.2.3" }] }[
                 url.searchParams.get("page") ?? ""
               ]

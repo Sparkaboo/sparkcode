@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 import { useGT } from "gt-react";
 
 const MULTIPLE_ACCOUNTS_FAQ_URL =
-  "https://github.com/Sparkaboo/sparkcode/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
+  "https://github.com/fyrko-labs/sparkcode/blob/main/docs/user/faq.md#can-i-add-a-bunch-of-accounts-for-one-provider";
 
 const PROVIDER_NAMES = new Map<string, string>([
   ["codex", "Codex"],

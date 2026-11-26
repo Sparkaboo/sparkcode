@@ -1,8 +1,8 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
 const FALLBACK_TRIAGE_COMMAND = "sparkcode triage";
-const DOWNLOAD_URL = "https://github.com/Sparkaboo/sparkcode/releases";
-const ISSUE_URL = "https://github.com/Sparkaboo/sparkcode/issues/new";
+const DOWNLOAD_URL = "https://github.com/fyrko-labs/sparkcode/releases";
+const ISSUE_URL = "https://github.com/fyrko-labs/sparkcode/issues/new";
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
 const REPEAT_FAILURE_MS = 5 * 60_000;
 const MAX_CAUSES = 3;

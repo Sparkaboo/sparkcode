@@ -36,6 +36,7 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import { purgeDeletedThreadPayload } from "./ThreadDataPurge.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 
 export class EventSinkWriteError extends Schema.TaggedError<EventSinkWriteError>()(
@@ -403,6 +404,20 @@ const layerBase: Layer.Layer<
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
         });
+        // Purge deleted threads' conversation data and historical events after applying the full
+        // batch so sibling cancellation events emitted alongside thread.deleted are cleared too.
+        const deletedThreadStartSequence = new Map<ThreadId, number>();
+        for (const stored of storedEvents) {
+          if (stored.event.type === "thread.deleted") {
+            const previous = deletedThreadStartSequence.get(stored.event.threadId);
+            if (previous === undefined || stored.sequence < previous) {
+              deletedThreadStartSequence.set(stored.event.threadId, stored.sequence);
+            }
+          }
+        }
+        for (const [threadId, keepEventsFromSequence] of deletedThreadStartSequence) {
+          yield* purgeDeletedThreadPayload(sql, threadId, { keepEventsFromSequence });
+        }
         const sequence = storedEvents.at(-1)?.sequence;
         if (sequence !== undefined) {
           const now = DateTime.formatIso(yield* DateTime.now);

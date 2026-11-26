@@ -1,3 +1,4 @@
+import type { ProjectId, ThreadId } from "@t3tools/contracts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -12,6 +13,12 @@ import {
   EVENT_LOG_PRUNED_THROUGH,
 } from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import {
+  hardDeleteExpiredProjectTombstone,
+  hardDeleteExpiredThreadTombstone,
+  purgeDeletedThreadPayload,
+  purgeDeletedThreadRuntimePointers,
+} from "./ThreadDataPurge.ts";
 
 export class ProjectionMaintenanceError extends Schema.TaggedError<ProjectionMaintenanceError>()(
   "ProjectionMaintenanceError",
@@ -252,11 +259,130 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
       return { deletedEventCount, deletedReceiptCount };
     });
 
+    // Sweeps soft-deleted threads (including pre-existing rows from older versions) and hard-deletes
+    // expired thread and project tombstones once the retained sync window has passed.
+    const pruneDeletedThreadsAndProjects = Effect.fnUntraced(function* (
+      cutoffMillis: number,
+      betweenPages: Effect.Effect<void>,
+    ) {
+      let deletedEventCount = 0;
+      let deletedReceiptCount = 0;
+
+      for (let cursor = ""; ;) {
+        const rows = yield* sql<{ readonly thread_id: ThreadId; readonly deleted_at: string }>`
+          SELECT thread_id, deleted_at
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NOT NULL
+            AND thread_id > ${cursor}
+          ORDER BY thread_id ASC
+          LIMIT ${PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        yield* Effect.yieldNow;
+        if (rows.length > 0) {
+          for (const row of rows) {
+            const deletedAtMillis = Date.parse(row.deleted_at);
+            const expired = Number.isFinite(deletedAtMillis) && deletedAtMillis <= cutoffMillis;
+            const counts = yield* sql.withTransaction(
+              Effect.gen(function* () {
+                const current = yield* sql<{
+                  readonly deleted_at: string | null;
+                  readonly has_unsettled_effects: number;
+                }>`
+                  SELECT
+                    deleted_at,
+                    EXISTS (
+                      SELECT 1
+                      FROM orchestration_v2_effect_outbox
+                      WHERE thread_id = ${row.thread_id}
+                        AND status IN ('pending', 'running')
+                    ) AS has_unsettled_effects
+                  FROM orchestration_v2_projection_threads
+                  WHERE thread_id = ${row.thread_id}
+                `;
+                const state = current[0];
+                if (state === undefined || state.deleted_at === null) {
+                  return { deletedEventCount: 0, deletedReceiptCount: 0 };
+                }
+                if (expired && state.has_unsettled_effects === 0) {
+                  return yield* hardDeleteExpiredThreadTombstone(sql, row.thread_id);
+                }
+                const payload = yield* purgeDeletedThreadPayload(sql, row.thread_id);
+                if (state.has_unsettled_effects === 0) {
+                  yield* purgeDeletedThreadRuntimePointers(sql, row.thread_id);
+                }
+                return { deletedEventCount: payload.deletedEventCount, deletedReceiptCount: 0 };
+              }),
+            );
+            deletedEventCount += counts.deletedEventCount;
+            deletedReceiptCount += counts.deletedReceiptCount;
+            yield* Effect.yieldNow;
+          }
+        }
+        yield* betweenPages;
+        if (rows.length < PAGE_SIZE) break;
+        cursor = rows.at(-1)?.thread_id ?? cursor;
+      }
+
+      for (let cursor = ""; ;) {
+        const rows = yield* sql<{ readonly project_id: ProjectId; readonly deleted_at: string }>`
+          SELECT project_id, deleted_at
+          FROM projection_projects
+          WHERE deleted_at IS NOT NULL
+            AND project_id > ${cursor}
+          ORDER BY project_id ASC
+          LIMIT ${PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        yield* Effect.yieldNow;
+        if (rows.length > 0) {
+          for (const row of rows) {
+            const deletedAtMillis = Date.parse(row.deleted_at);
+            if (!Number.isFinite(deletedAtMillis) || deletedAtMillis > cutoffMillis) continue;
+            const counts = yield* sql.withTransaction(
+              Effect.gen(function* () {
+                const eligible = yield* sql<{ readonly ok: number }>`
+                  SELECT 1 AS ok
+                  FROM projection_projects
+                  WHERE project_id = ${row.project_id}
+                    AND deleted_at IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM orchestration_v2_projection_threads
+                      WHERE project_id = ${row.project_id}
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM projection_threads
+                      WHERE project_id = ${row.project_id}
+                    )
+                `;
+                if (eligible.length === 0) {
+                  return { deletedEventCount: 0, deletedReceiptCount: 0 };
+                }
+                return yield* hardDeleteExpiredProjectTombstone(sql, row.project_id);
+              }),
+            );
+            deletedEventCount += counts.deletedEventCount;
+            deletedReceiptCount += counts.deletedReceiptCount;
+            yield* Effect.yieldNow;
+          }
+        }
+        yield* betweenPages;
+        if (rows.length < PAGE_SIZE) break;
+        cursor = rows.at(-1)?.project_id ?? cursor;
+      }
+
+      return { deletedEventCount, deletedReceiptCount };
+    });
+
     // A pass prunes through the mark the previous pass left once that mark is a day old, so
     // at least RETAINED_EVENT_HISTORY of events always remains. Receipts stay for idempotency.
     const pruneEventStore = Effect.fn("ProjectionMaintenance.pruneEventStore")(
       function* (betweenPages: Effect.Effect<void> = Effect.void) {
         const now = yield* DateTime.now;
+        const cutoffMillis =
+          DateTime.toEpochMillis(now) - Duration.toMillis(RETAINED_EVENT_HISTORY);
+        const deletedTombstones = yield* pruneDeletedThreadsAndProjects(cutoffMillis, betweenPages);
+
         const metadata = yield* sql<MetadataRow>`
           SELECT projection_name, last_sequence, updated_at
           FROM orchestration_v2_projection_metadata
@@ -273,10 +399,10 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
           SELECT
             COALESCE((SELECT MAX(sequence) FROM orchestration_events), 0) AS sequence,
             COALESCE((SELECT MAX(rowid) FROM orchestration_command_receipts), 0) AS receipt_row_id
-        `.pipe(NodeSqliteClient.readOnly);
+          `.pipe(NodeSqliteClient.readOnly);
         const head = bounds[0]?.sequence ?? 0;
 
-        let deletedEventCount = 0;
+        let deletedEventCount = deletedTombstones.deletedEventCount;
         const markIsDue =
           mark !== undefined &&
           DateTime.toEpochMillis(now) - Date.parse(mark.updated_at) >=
@@ -305,7 +431,7 @@ export const layer: Layer.Layer<ProjectionMaintenanceV2, never, SqlClient.SqlCli
 
         return {
           deletedEventCount,
-          deletedReceiptCount: legacy.deletedReceiptCount,
+          deletedReceiptCount: deletedTombstones.deletedReceiptCount + legacy.deletedReceiptCount,
           reclaimableBytes,
         };
       },

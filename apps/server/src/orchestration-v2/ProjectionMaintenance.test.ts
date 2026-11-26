@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  MessageId,
   NodeId,
   PlanId,
   type OrchestrationV2AppThread,
@@ -382,4 +383,442 @@ it.effect("keeps an anchor that a row appended during the pass borrows from", ()
       );
     }),
   ).pipe(Effect.provide(layerTest)),
+);
+
+const countRows = <E>(query: Effect.Effect<ReadonlyArray<{ readonly count: number }>, E>) =>
+  query.pipe(Effect.map((rows) => rows[0]?.count ?? 0));
+
+it.effect(
+  "immediately purges conversation payloads, FTS5 entries, and historical events on thread.deleted without touching live threads",
+  () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const eventStore = yield* EventStore.EventStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const deletedThreadId = ThreadId.make("thread:purge-immediate");
+      const liveThreadId = ThreadId.make("thread:purge-live");
+      const deletedThread = makeThread(deletedThreadId, now);
+      const liveThread = makeThread(liveThreadId, now);
+
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:purge:deleted:created"),
+            type: "thread.created",
+            threadId: deletedThreadId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: deletedThread,
+          },
+          {
+            id: EventId.make("event:purge:live:created"),
+            type: "thread.created",
+            threadId: liveThreadId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: liveThread,
+          },
+        ],
+      });
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:purge:deleted:message"),
+            type: "message.updated",
+            threadId: deletedThreadId,
+            occurredAt: now,
+            payload: {
+              id: MessageId.make("message:purge:deleted"),
+              threadId: deletedThreadId,
+              runId: null,
+              nodeId: null,
+              role: "user",
+              createdBy: "user",
+              creationSource: "web",
+              text: "topsecretdeletedtoken should vanish immediately",
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          itemEvent(deletedThreadId, now, itemSpecs[0], 0, "event:purge:deleted:item"),
+          ...subagentEvents(deletedThreadId, now, 0, "purge-0"),
+          {
+            id: EventId.make("event:purge:live:message"),
+            type: "message.updated",
+            threadId: liveThreadId,
+            occurredAt: now,
+            payload: {
+              id: MessageId.make("message:purge:live"),
+              threadId: liveThreadId,
+              runId: null,
+              nodeId: null,
+              role: "user",
+              createdBy: "user",
+              creationSource: "web",
+              text: "survivorlivetoken must remain searchable",
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      yield* sql`
+        INSERT INTO mcp_app_model_context (thread_id, item_id, server, tool, text, updated_at)
+        VALUES (${deletedThreadId}, 'item-1', 'srv', 'tool', 'secret mcp context', ${DateTime.formatIso(now)})
+      `;
+
+      // Confirm indexed before deletion.
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+            WHERE orchestration_v2_message_search MATCH 'topsecretdeletedtoken'
+          `,
+        ),
+        1,
+      );
+
+      // Delete the thread along with a sibling subagent disposal event referencing the prompt.
+      const subagentDisposal = subagentEvents(deletedThreadId, now, 0, "purge-disposed")[0]!;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:purge:deleted:tombstone"),
+            type: "thread.deleted",
+            threadId: deletedThreadId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: { ...deletedThread, deletedAt: now, updatedAt: now },
+          },
+          subagentDisposal,
+        ],
+      });
+
+      // Tombstone remains for the sync window, while all child payloads and search rows are gone.
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${deletedThreadId} AND deleted_at IS NOT NULL
+          `,
+        ),
+        1,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_messages
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+            WHERE orchestration_v2_message_search MATCH 'topsecretdeletedtoken'
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_turn_items
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_turn_item_counts
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_turn_item_positions
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_subagents
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM mcp_app_model_context
+            WHERE thread_id = ${deletedThreadId}
+          `,
+        ),
+        0,
+      );
+      assert.deepEqual(yield* remainingEventIds(deletedThreadId), [
+        "event:purge:deleted:created",
+        "event:purge:deleted:tombstone",
+        "event:turn-item-compaction:subagent:purge-disposed",
+      ]);
+
+      // Kept subagent disposal event has its prompt scrubbed and decodes cleanly without dangling anchors.
+      const keptSubagents = yield* eventStore
+        .read({ threadId: deletedThreadId, eventType: "subagent.updated" })
+        .pipe(Stream.runCollect);
+      assert.deepEqual(
+        Array.from(keptSubagents, (stored) =>
+          stored.event.type === "subagent.updated" ? stored.event.payload.prompt : null,
+        ),
+        [""],
+      );
+
+      // Sibling live thread is untouched.
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+            WHERE orchestration_v2_message_search MATCH 'survivorlivetoken'
+          `,
+        ),
+        1,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_messages
+            WHERE thread_id = ${liveThreadId}
+          `,
+        ),
+        1,
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "sweeps legacy soft-deleted thread data immediately and hard-deletes expired thread and project tombstones",
+  () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const nowIso = DateTime.formatIso(now);
+      const threadId = ThreadId.make("thread:tombstone-expiry");
+      const thread = makeThread(threadId, now);
+      const projectId = thread.projectId;
+
+      // Seed a soft-deleted project and a thread whose soft-deletion pre-dated immediate purging.
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          ${projectId}, 'Deleted project', '/tmp/deleted-project', '[]', ${nowIso}, ${nowIso}, ${nowIso}
+        )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+        ) VALUES (
+          'event:project:deleted', 'project', ${projectId}, 0, 'project.deleted',
+          ${nowIso}, 'server', '{}', '{}', 1
+        )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_command_receipts (
+          command_id, aggregate_kind, aggregate_id, command_type, accepted_at, result_sequence, status, error
+        ) VALUES
+          ('cmd:thread:expiry', 'thread', ${threadId}, 'thread.delete', ${nowIso}, 1, 'accepted', NULL),
+          ('cmd:project:expiry', 'project', ${projectId}, 'project.delete', ${nowIso}, 1, 'accepted', NULL)
+      `;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:expiry:created"),
+            type: "thread.created",
+            threadId,
+            providerInstanceId,
+            occurredAt: now,
+            payload: thread,
+          },
+          {
+            id: EventId.make("event:expiry:message"),
+            type: "message.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: MessageId.make("message:expiry:legacy"),
+              threadId,
+              runId: null,
+              nodeId: null,
+              role: "user",
+              createdBy: "user",
+              creationSource: "web",
+              text: "legacysoftdeletedsecret",
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      // Simulate a pre-existing soft-deleted thread from an older database (leftover child rows + V1 rows).
+      yield* sql`
+        UPDATE orchestration_v2_projection_threads
+        SET deleted_at = ${nowIso}
+        WHERE thread_id = ${threadId}
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          branch, worktree_path, latest_turn_id, created_at, updated_at, archived_at, deleted_at
+        ) VALUES (
+          ${threadId}, ${projectId}, 'Legacy', '{"instanceId":"codex","model":"gpt-5.4"}',
+          'full-access', 'default', NULL, NULL, NULL, ${nowIso}, ${nowIso}, NULL, ${nowIso}
+        )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_v2_effect_outbox (
+          effect_id, command_id, thread_id, effect_type, payload_json, status, attempt_count, available_at, created_at, updated_at
+        ) VALUES (
+          'effect:expiry:pending', 'cmd:thread:expiry', ${threadId}, 'provider-session.detach', '{}', 'pending', 0, ${nowIso}, ${nowIso}, ${nowIso}
+        )
+      `;
+
+      // Pass 1 (within the 1-day window): sweeps leftover conversation payloads and FTS5,
+      // but keeps the tombstone and project until expiry.
+      yield* maintenance.pruneEventStore();
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_messages
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_message_search
+            WHERE orchestration_v2_message_search MATCH 'legacysoftdeletedsecret'
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        1,
+      );
+
+      // Pass 2 (after 1 day, while outbox effect is still pending): tombstone stays protected.
+      yield* TestClock.adjust("1 day");
+      yield* maintenance.pruneEventStore();
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        1,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM projection_projects
+            WHERE project_id = ${projectId}
+          `,
+        ),
+        1,
+      );
+
+      // Pass 3 (once outbox effect settles): thread tombstone, V1 row, events, receipts, outbox,
+      // and soft-deleted project are all permanently removed.
+      yield* sql`
+        UPDATE orchestration_v2_effect_outbox
+        SET status = 'succeeded', completed_at = ${nowIso}
+        WHERE effect_id = 'effect:expiry:pending'
+      `;
+      const finalPass = yield* maintenance.pruneEventStore();
+      assert.isAbove(finalPass.deletedEventCount, 0);
+      assert.equal(finalPass.deletedReceiptCount, 2);
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM projection_threads
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_events
+            WHERE stream_id IN (${threadId}, ${projectId})
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_command_receipts
+            WHERE aggregate_id IN (${threadId}, ${projectId})
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM orchestration_v2_effect_outbox
+            WHERE thread_id = ${threadId}
+          `,
+        ),
+        0,
+      );
+      assert.equal(
+        yield* countRows(
+          sql<{ readonly count: number }>`
+            SELECT COUNT(*) AS count FROM projection_projects
+            WHERE project_id = ${projectId}
+          `,
+        ),
+        0,
+      );
+    }).pipe(Effect.provide(layerTest)),
 );
